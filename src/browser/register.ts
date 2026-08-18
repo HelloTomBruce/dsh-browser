@@ -1,12 +1,14 @@
 // dsh-browser · 浏览器 — 工具注册(definePlainTool × 22)
-import type { ReefContext, PlainToolDefinition } from "../lib/types.js";
+import type { ReefContext, PlainToolDefinition, ToolRunContext } from "../lib/types.js";
 import type { BrowserConfig } from "./types.js";
 import { definePlainTool, genericCard } from "../lib/tools.js";
+import { recordCall } from "./session.js";
 import {
   openTool, snapshotTool, clickTool, typeTool, pressTool, evalTool,
   screenshotTool, waitTool, backTool, reloadTool, statusTool, closeTool,
   tabsTool, downloadTool, uploadTool, cookiesTool, formTool, formSaveTool,
   formsTool, profileTool, elementsTool, waitForLoginTool,
+  waitForTool, assertTool, networkTool, recordTool, replayTool,
 } from "./tools.js";
 
 export function registerTools(ctx: ReefContext, config: BrowserConfig) {
@@ -14,7 +16,74 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
   if (tools === undefined) return;
   const timeout = (ms?: number) => ms ?? config.timeoutMs;
 
-  tools.register(
+  /** 参数净化:大字段(script/fields 等)截断,避免操作日志膨胀。 */
+  function sanitizeArgs(args: any): any {
+    if (typeof args !== "object" || args === null) return args;
+    const out: any = {};
+    for (const [k, v] of Object.entries(args)) {
+      const s = JSON.stringify(v);
+      out[k] = s && s.length > 300 ? `${s.slice(0, 300)}…(截断)` : v;
+    }
+    return out;
+  }
+
+  /** 打点包装:每次工具调用记录操作轨迹(测试报告 / 录制数据源)。 */
+  function register(def: PlainToolDefinition) {
+    const original = def.execute;
+    def.execute = async (args: any, exec: ToolRunContext) => {
+      const t0 = Date.now();
+      const sanitized = sanitizeArgs(args);
+      try {
+        const value = await original(args, exec);
+        recordCall({ tool: def.name, args: sanitized, ok: true, ms: Date.now() - t0, ts: Date.now() });
+        return value;
+      } catch (error) {
+        recordCall({
+          tool: def.name,
+          args: sanitized,
+          ok: false,
+          ms: Date.now() - t0,
+          ts: Date.now(),
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    };
+    tools!.register(def);
+  }
+
+  /** 回放步骤 → 工具实现映射(config 闭包)。 */
+  const stepImpls: Record<string, (args: any) => Promise<unknown>> = {
+    browser_open: (a) => openTool(config, a),
+    browser_snapshot: (a) => snapshotTool(config, a),
+    browser_click: (a) => clickTool(config, a),
+    browser_type: (a) => typeTool(config, a),
+    browser_press: (a) => pressTool(config, a),
+    browser_eval: (a) => evalTool(config, a),
+    browser_screenshot: (a) => screenshotTool(config, a),
+    browser_wait: (a) => waitTool(config, a),
+    browser_back: () => backTool(config),
+    browser_reload: () => reloadTool(config),
+    browser_status: () => statusTool(),
+    browser_close: () => closeTool(),
+    browser_tabs: (a) => tabsTool(config, a),
+    browser_download: (a) => downloadTool(config, a),
+    browser_upload: (a) => uploadTool(config, a),
+    browser_cookies: (a) => cookiesTool(config, a),
+    browser_form: (a) => formTool(config, a),
+    browser_form_save: (a) => formSaveTool(a),
+    browser_forms: (a) => formsTool(a),
+    browser_profile: (a) => profileTool(config, a),
+    browser_elements: (a) => elementsTool(config, a),
+    browser_wait_for_login: (a) => waitForLoginTool(config, a),
+    browser_wait_for: (a) => waitForTool(config, a),
+    browser_assert: (a) => assertTool(config, a, undefined as any),
+    browser_network: (a) => networkTool(a),
+    browser_record: (a) => recordTool(a),
+    browser_replay: (a) => replayTool(a, stepImpls),
+  };
+
+  register(
     definePlainTool({
       name: "browser_open",
       description:
@@ -50,7 +119,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_snapshot",
       description:
@@ -83,7 +152,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_click",
       description: "点击页面上匹配 CSS 选择器的元素(来自 browser_snapshot 的链接/表单分析)。",
@@ -112,7 +181,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_type",
       description:
@@ -149,7 +218,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_press",
       description:
@@ -180,7 +249,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_eval",
       description:
@@ -207,7 +276,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_screenshot",
       description:
@@ -236,7 +305,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_wait",
       description: "等待指定毫秒数(上限 60000),常用于等待页面渲染或请求完成。",
@@ -263,7 +332,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_back",
       description: "返回上一页(如无历史则无操作)。",
@@ -280,7 +349,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_reload",
       description: "重新加载当前页面。",
@@ -297,7 +366,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_status",
       description: "查看浏览器会话是否打开、当前 URL 与标题。",
@@ -323,7 +392,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_close",
       description: "关闭浏览器会话并释放资源;下次使用工具时会自动重新打开。",
@@ -339,7 +408,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_tabs",
       description:
@@ -378,7 +447,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_download",
       description:
@@ -407,7 +476,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_upload",
       description:
@@ -439,7 +508,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_cookies",
       description:
@@ -479,7 +548,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_form",
       description:
@@ -523,7 +592,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_form_save",
       description:
@@ -552,7 +621,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_forms",
       description: "管理已保存的表单回放:list 列出,delete 删除指定表单。",
@@ -585,7 +654,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_profile",
       description:
@@ -618,7 +687,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_wait_for_login",
       description:
@@ -649,7 +718,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     }),
   );
 
-  tools.register(
+  register(
     definePlainTool({
       name: "browser_elements",
       description:
@@ -679,6 +748,190 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
           .join("\n") || "(no interactive elements)",
       timeoutMs: timeout(),
       execute: (args) => elementsTool(config, args),
+    }),
+  );
+
+  register(
+    definePlainTool({
+      name: "browser_wait_for",
+      description:
+        "通用显式等待(测试同步原语):轮询直到条件成立或超时抛错。condition 四类:1) {selector:'#btn', state:'visible|hidden|attached|detached'} 元素状态(默认 visible);2) {url:'正则字符串'} 当前 URL 匹配;3) {text:'子串'} 页面可见文本包含;4) {count:{selector,op:'eq|gt|gte|lt|lte',value}} 元素数量比较;5) {eval:'JS 表达式'} 求值 truthy。用于等页面渲染、等请求完成、等元素出现。",
+      parameters: {
+        type: "object",
+        properties: {
+          condition: {
+            type: "object",
+            description: "等待条件(见描述,五选一)。",
+          },
+          timeoutMs: { type: "integer", description: "超时毫秒,默认 10000,上限 120000。" },
+          intervalMs: { type: "integer", description: "轮询间隔毫秒,默认 500。" },
+        },
+        required: ["condition"],
+        additionalProperties: false,
+      },
+      outputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          met: { type: "boolean" },
+          url: { type: "string" },
+          title: { type: "string" },
+        },
+        required: ["met", "url", "title"],
+      },
+      render: (_args, value) => `等待条件满足: ${value.url}`,  
+      timeoutMs: timeout(),
+      execute: (args) => waitForTool(config, args),
+    }),
+  );
+
+  register(
+    definePlainTool({
+      name: "browser_assert",
+      description:
+        "结构化断言(测试核心):condition 在 timeoutMs 内成立则通过(条件格式同 browser_wait_for)。失败时自动截图存证据目录(assert-fail-*.png)并抛错,错误消息含原因与截图路径。适合断言登录成功、关键元素出现、接口返回、文本正确。",
+      parameters: {
+        type: "object",
+        properties: {
+          condition: { type: "object", description: "断言条件(五选一,同 browser_wait_for)。" },
+          timeoutMs: { type: "integer", description: "断言超时毫秒,默认 5000,上限 60000。" },
+          intervalMs: { type: "integer", description: "轮询间隔毫秒,默认 300。" },
+        },
+        required: ["condition"],
+        additionalProperties: false,
+      },
+      outputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          passed: { type: "boolean" },
+          url: { type: "string" },
+          title: { type: "string" },
+        },
+        required: ["passed", "url", "title"],
+      },
+      render: (_args, value) => `断言通过: ${value.url}`,  
+      timeoutMs: timeout(),
+      execute: (args, exec) => assertTool(config, args, exec),
+    }),
+  );
+
+  register(
+    definePlainTool({
+      name: "browser_network",
+      description:
+        "网络记录查询(自动记录页面 XHR/fetch 接口请求,含请求/响应体截断存储,每 profile 上限 500 条)。action:list 列出(可按 urlSubstr/method/status 过滤,limit 默认 50);failed 只列失败/4xx5xx;wait 等待某个 url 正则匹配的接口出现(带 timeoutMs);clear 清空记录。适合断言接口出入参、排查 4xx/5xx。",
+      parameters: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["list", "failed", "wait", "clear"], description: "默认 list。" },
+          urlSubstr: { type: "string", description: "URL 子串过滤(list/failed)。" },
+          method: { type: "string", description: "HTTP 方法过滤(list/failed)。" },
+          status: { type: "integer", description: "状态码过滤(list/failed)。" },
+          limit: { type: "integer", description: "返回条数上限,默认 50。" },
+          url: { type: "string", description: "wait 时的 URL 正则。" },
+          timeoutMs: { type: "integer", description: "wait 超时毫秒,默认 10000。" },
+        },
+        additionalProperties: false,
+      },
+      outputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          entries: { type: "array", items: { type: "object" } },
+          failed: { type: "array", items: { type: "object" } },
+          matched: { type: "object" },
+          cleared: { type: "boolean" },
+        },
+        required: [],
+      },
+      render: (_args, value) => {
+        const list = value.entries ?? value.failed ?? (value.matched ? [value.matched] : []);
+        if (value.cleared) return "网络记录已清空";
+        return (list as any[])
+          .map((e: any) => {
+            const head = `${e.method} ${e.url} → ${e.failed ? "FAILED" : (e.ok ? e.status : e.status + " !")}${e.durationMs !== undefined ? ` ${e.durationMs}ms` : ""}`;
+            const reqBody = e.postData ? `\n  req: ${String(e.postData).slice(0, 160)}` : "";
+            const resBody = e.body ? `\n  res: ${String(e.body).slice(0, 240)}` : "";
+            return head + reqBody + resBody;
+          })
+          .join("\n") || "(无记录)";
+      },
+      timeoutMs: timeout(),
+      execute: (args) => networkTool(args),
+    }),
+  );
+
+  register(
+    definePlainTool({
+      name: "browser_record",
+      description:
+        "操作录制(回归测试数据源):start 开始录制(后续浏览器工具调用自动记录),stop 结束并返回步数,save <name> 保存最近 100 次调用为命名录制,list/delete 管理。配合 browser_replay 一键回放。",
+      parameters: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["start", "stop", "save", "list", "delete"], description: "默认 start。" },
+          name: { type: "string", description: "save/delete 时的录制名。" },
+        },
+        additionalProperties: false,
+      },
+      outputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          recording: { type: "boolean" },
+          steps: { type: "integer" },
+          saved: { type: "string" },
+          recordings: { type: "array", items: { type: "object" } },
+          deleted: { type: "boolean" },
+          name: { type: "string" },
+          hint: { type: "string" },
+        },
+        required: [],
+      },
+      render: (args, value) => {
+        if (args.action === "start") return "开始录制(后续浏览器调用将记录)";
+        if (args.action === "stop") return `录制结束,共 ${value.steps} 步(browser_record save <name> 保存)`;
+        if (args.action === "save") return `已保存录制 "${value.saved}"(${value.steps} 步)`;
+        if (args.action === "delete") return value.deleted ? `已删除 "${value.name}"` : `无此录制 "${value.name}"`;
+        return (value.recordings ?? []).map((r: any) => `"${r.name}"(${r.steps} 步): ${r.preview}`).join("\n") || "(无录制)";
+      },
+      timeoutMs: timeout(),
+      execute: (args) => recordTool(args),
+    }),
+  );
+
+  register(
+    definePlainTool({
+      name: "browser_replay",
+      description:
+        "回放录制或步骤序列(回归测试):name 指定已保存录制(browser_record save),或直接传 steps 数组(每步 {tool, args})。failFast 默认 true(遇错停止);返回每步结果与汇总。回放中的调用会记入操作轨迹。",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "已保存录制名(与 steps 二选一)。" },
+          steps: { type: "array", items: { type: "object" }, description: "步骤数组 [{tool, args}]。" },
+          failFast: { type: "boolean", description: "遇错即停,默认 true。" },
+        },
+        additionalProperties: false,
+      },
+      outputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          source: { type: "string" },
+          total: { type: "integer" },
+          passed: { type: "integer" },
+          failed: { type: "integer" },
+          stoppedAt: { type: "integer" },
+          results: { type: "array", items: { type: "object" } },
+          summary: { type: "string" },
+        },
+        required: ["source", "total", "passed", "failed", "results", "summary"],
+      },
+      render: (_args, value) => `${value.summary}\n${(value.results ?? []).map((r: any) => `${r.ok ? "✓" : "✗"} #${r.index} ${r.tool}${r.error ? ` — ${String(r.error).slice(0, 120)}` : ""}`).join("\n")}`,
+      timeoutMs: timeout(),
+      execute: (args) => replayTool(args, stepImpls),
     }),
   );
 }

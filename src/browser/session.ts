@@ -1,7 +1,7 @@
 // dsh-browser · 浏览器 — 会话与标签页管理(多 profile、userDataDir 持久化、下载记录、访问历史、截图清理)
 import { readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import type { Browser, BrowserContext, Page } from "playwright-core";
+import type { Browser, BrowserContext, Page, Request } from "playwright-core";
 import type { BrowserConfig, ProfileState, DownloadEntry, FormField, NavEntry } from "./types.js";
 
 /** 当前活动 profile 名(默认 "default")。 */
@@ -16,6 +16,99 @@ const historyByProfile = new Map<string, NavEntry[]>();
 export const savedForms = new Map<string, FormField[]>();
 /** 最近一次 browser_form 填充的字段(供 browser_form_save 无参保存)。 */
 export let lastFormFields: FormField[] = [];
+
+/** 已保存的录制脚本:name → 步骤数组。 */
+export const savedRecordings = new Map<string, { steps: { tool: string; args: any }[]; savedAt: number }>();
+/** 当前录制中的 buffer(非空 = 录制中)。 */
+let recordingSteps: TestCall[] | null = null;
+
+/** 一次工具调用的记录(操作轨迹 / 录制 / 回放共用)。 */
+export interface TestCall {
+  tool: string;
+  args: Record<string, any>;
+  ok: boolean;
+  ms: number;
+  ts: number;
+  error?: string;
+}
+
+/** 操作轨迹(全局,记录 currentProfile;上限 500 条)。 */
+const testLog: TestCall[] = [];
+
+export function isRecording(): boolean {
+  return recordingSteps !== null;
+}
+
+export function startRecording(): void {
+  recordingSteps = [];
+}
+
+export function stopRecording(): TestCall[] {
+  const steps = recordingSteps ?? [];
+  recordingSteps = null;
+  return steps;
+}
+
+/** 操作轨迹追加(同时写入录制 buffer,排除 record/replay 自身)。 */
+export function recordCall(call: TestCall): void {
+  testLog.push(call);
+  if (testLog.length > 500) testLog.shift();
+  if (recordingSteps !== null && call.tool !== "browser_record" && call.tool !== "browser_replay") {
+    recordingSteps.push(call);
+    if (recordingSteps.length > 500) recordingSteps.shift();
+  }
+}
+
+/** 操作轨迹(按时间倒序,最新在前)。 */
+export function testLogOf(): TestCall[] {
+  return [...testLog].reverse();
+}
+
+export function clearTestLog(): void {
+  testLog.length = 0;
+}
+
+/** 网络请求/响应记录。 */
+export interface NetworkEntry {
+  url: string;
+  method: string;
+  resourceType: string;
+  status?: number;
+  ok?: boolean;
+  failed?: boolean;
+  error?: string;
+  startedAt: number;
+  durationMs?: number;
+  /** 请求体(截断,默认记录)。 */
+  postData?: string | null;
+  /** 响应体(截断,默认记录;SSE 与大响应跳过)。 */
+  body?: string | null;
+}
+
+const networkByProfile = new Map<string, NetworkEntry[]>();
+
+function networkOf(name: string): NetworkEntry[] {
+  let list = networkByProfile.get(name);
+  if (list === undefined) {
+    list = [];
+    networkByProfile.set(name, list);
+  }
+  return list;
+}
+
+export function networkEntries(name: string): NetworkEntry[] {
+  return networkOf(name);
+}
+
+export function addNetworkEntry(profile: string, entry: NetworkEntry): void {
+  const list = networkOf(profile);
+  list.push(entry);
+  if (list.length > 500) list.shift();
+}
+
+export function clearNetwork(profile: string): void {
+  networkByProfile.delete(profile);
+}
 
 export function profileConfig(config: BrowserConfig, name: string): BrowserConfig {
   const named = config.profiles?.[name];
@@ -95,6 +188,69 @@ export function attachPage(page: Page, config: BrowserConfig): void {
         if (t) entry.title = t;
       })
       .catch(() => {});
+  });
+  // 网络记录:只跟踪 XHR/fetch 接口请求(测试断言用),按 profile 隔离。
+  // recordBodies 开启时记录请求体/响应体(截断;SSE 流与超大响应跳过)。
+  const recordBodies = config.recordBodies !== false;
+  const pendingReqs = new WeakMap<Request, { url: string; method: string; startedAt: number; postData: string | null }>();
+  page.on("request", (req) => {
+    if (req.resourceType() !== "xhr" && req.resourceType() !== "fetch") return;
+    let postData: string | null = null;
+    if (recordBodies) {
+      try {
+        const raw = req.postData();
+        if (raw) postData = raw.length > 2000 ? `${raw.slice(0, 2000)}…(截断)` : raw;
+      } catch {
+        /* 读取失败忽略 */
+      }
+    }
+    pendingReqs.set(req, { url: req.url(), method: req.method(), startedAt: Date.now(), postData });
+  });
+  page.on("response", async (res) => {
+    const req = res.request();
+    if (req.resourceType() !== "xhr" && req.resourceType() !== "fetch") return;
+    const info = pendingReqs.get(req);
+    if (info === undefined) return;
+    let body: string | null = null;
+    if (recordBodies) {
+      try {
+        const headers = res.headers();
+        const contentType = (headers["content-type"] ?? "").toLowerCase();
+        const contentLength = Number(headers["content-length"] ?? 0);
+        // 跳过 SSE 流(永不结束)与超大响应(>500KB),避免挂起/内存膨胀。
+        if (!contentType.includes("text/event-stream") && !(contentLength > 500_000)) {
+          const text = await res.text();
+          if (text) body = text.length > 4000 ? `${text.slice(0, 4000)}…(截断)` : text;
+        }
+      } catch {
+        /* 响应体读取失败忽略 */
+      }
+    }
+    addNetworkEntry(profile, {
+      url: res.url(),
+      method: info.method,
+      resourceType: req.resourceType(),
+      status: res.status(),
+      ok: res.ok(),
+      startedAt: info.startedAt,
+      durationMs: Date.now() - info.startedAt,
+      postData: info.postData,
+      body,
+    });
+  });
+  page.on("requestfailed", (req) => {
+    if (req.resourceType() !== "xhr" && req.resourceType() !== "fetch") return;
+    const info = pendingReqs.get(req);
+    if (info === undefined) return;
+    addNetworkEntry(profile, {
+      url: req.url(),
+      method: info.method,
+      resourceType: req.resourceType(),
+      failed: true,
+      error: req.failure()?.errorText ?? "failed",
+      startedAt: info.startedAt,
+      durationMs: Date.now() - info.startedAt,
+    });
   });
 }
 

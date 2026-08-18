@@ -12,6 +12,36 @@ export function urlPath(req: IncomingMessage): string {
   }
 }
 
+/** Read the request body as a UTF-8 string (bounded). */
+export function readRawBody(req: IncomingMessage, limitBytes = 1_000_000): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > limitBytes) {
+        reject(new Error("request body too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
+/** Read and parse a JSON request body; `undefined` when the body is empty. */
+export async function readJsonBody(req: IncomingMessage, limitBytes?: number): Promise<unknown> {
+  const raw = await readRawBody(req, limitBytes);
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`invalid JSON body: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 /** Send a JSON response. */
 export function sendJson(
   res: ServerResponse,

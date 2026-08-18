@@ -16,6 +16,8 @@ export interface BrowserConfig {
   screenshotMaxCount?: number;
   /** 面板嵌入 + 实时画面 API 基路径。 */
   basePath?: string;
+  /** 网络记录是否保存请求/响应体(默认 true,截断存储)。 */
+  recordBodies?: boolean;
   maxTextChars?: number;
   maxLinks?: number;
   timeoutMs?: number;

@@ -1,29 +1,35 @@
 {
   "name": "dsh-browser",
   "version": "0.1.0",
-  "description": "DSH 插件:共享 Playwright 浏览器自动化(22 个 browser_* 工具)+ 原生界面实时画面面板。仅依赖 playwright-core,不依赖任何 @deepseek-ai 运行时包。",
+  "description": "DSH 插件:共享 Playwright 浏览器自动化(27 个 browser_* 工具)+ 原生界面实时画面面板 + 官方设置弹窗内的浏览器录制管理。仅依赖 playwright-core,不依赖任何 @deepseek-ai 运行时包。",
   "type": "module",
   "main": "./lib/index.js",
-  "types": "./lib/index.d.ts",
+  "types": "./lib/types/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/index.d.ts",
+      "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
     },
     "./package.json": "./package.json"
   },
   "files": [
-    "lib",
+    "lib/index.js",
+    "lib/client.js",
+    "lib/types/**/*.d.ts",
     "src",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsdown",
-    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
+    "build": "tsc -p tsconfig.json && tsdown",
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false && tsc -p tsconfig.test.json --noEmit --pretty false",
     "test": "vitest run",
-    "prepare": "tsdown",
+    "prepare": "tsc -p tsconfig.json && tsdown",
     "verify": "npm run typecheck && npm run test && npm run build"
   },
   "keywords": [
@@ -31,7 +37,9 @@
     "dsh-plugin",
     "deepseek-harness",
     "browser",
-    "playwright"
+    "playwright",
+    "automation",
+    "testing"
   ],
   "license": "MIT",
   "engines": {
@@ -42,13 +50,22 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/react": "^18.2.0",
     "tsdown": "^0.22.0",
-    "typescript": "^5.6.0",
+    "typescript": "^5.9.2",
     "vitest": "^3.0.0"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
     }
   }
 }

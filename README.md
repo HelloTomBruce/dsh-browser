@@ -52,6 +52,11 @@ dsh plugin --profile web add dsh-browser
 | `browser_screenshot` | 截图存为 PNG(自动清理,见下) |
 | `browser_wait` / `browser_back` / `browser_reload` | 等待 / 后退 / 刷新 |
 | `browser_wait_for_login` | 等待人工登录完成(配 `headless: false` 使用,见下) |
+| `browser_wait_for` | 通用显式等待(元素状态 / URL / 文本 / 数量 / eval,超时抛错) |
+| `browser_assert` | 结构化断言(失败自动截图存证据目录并报错) |
+| `browser_network` | 接口记录查询:list / failed(4xx/5xx)/ wait / clear,含请求/响应体(截断) |
+| `browser_record` | 操作录制:start / stop / save / list / delete |
+| `browser_replay` | 回放录制或步骤序列(回归测试,遇错可停) |
 | `browser_status` / `browser_close` | 状态 / 关闭会话 |
 | `browser_download` / `browser_upload` | 下载(保存到工作区)/ 上传本地文件 |
 | `browser_cookies` | Cookie 管理(list / set / clear,登录态处理) |
@@ -61,6 +66,37 @@ dsh plugin --profile web add dsh-browser
 **截图自动清理**:`browser_screenshot` 保存的 `.png` 自动修剪——每次截图后即时清理 + 每小时定时清扫;默认保留最近 7 天、最多 200 张(`screenshotMaxAgeDays` / `screenshotMaxCount`,设为 0 关闭对应规则),只清理截图目录直属文件。
 
 > 首次调用浏览器工具时自动启动浏览器;启动失败会提示安装 Chromium(`npx playwright install chromium`)或配置 `executablePath`。
+
+## 自动化测试
+
+插件提供完整的测试原语,agent 可以写出「等待 + 断言 + 网络校验 + 回放」的测试流程:
+
+```
+# 典型流程
+browser_open   打开目标页
+browser_wait_for   { selector: "#app", state: "visible" }         # 等页面稳定
+browser_assert     { text: "登录成功" }                            # 断言文本
+browser_assert     { count: { selector: ".row", op: "gte", value: 10 } }  # 断言数量
+browser_network    { action: "failed" }                           # 检查 4xx/5xx
+browser_network    { action: "wait", url: "api/orders", status: 200 }  # 等接口返回
+browser_screenshot  # 证据
+```
+
+**接口出入参**:`browser_network` 自动记录每个 XHR/fetch 的请求体(`postData`)与响应体(`body`,均截断:请求体 2000 字符、响应体 4000 字符;SSE 流与 >500KB 响应跳过;`config.recordBodies: false` 可关闭)。`wait` 匹配到的记录同样带出入参,可直接断言接口返回结构。
+
+**条件格式**(`browser_wait_for` / `browser_assert` 共用,五选一):
+
+| 字段 | 示例 | 说明 |
+| --- | --- | --- |
+| `selector` | `{ selector: "#btn", state: "visible" }` | 元素状态:visible / hidden / attached / detached |
+| `url` | `{ url: "https://.*\\.example\\.com" }` | 当前 URL 正则匹配 |
+| `text` | `{ text: "保存成功" }` | 页面可见文本包含 |
+| `count` | `{ count: { selector: ".row", op: "gte", value: 10 } }` | 元素数量比较(eq/gt/gte/lt/lte) |
+| `eval` | `{ eval: "location.hash === '#done'" }` | 任意 JS 表达式求值 truthy |
+
+`browser_assert` 失败时自动截图(`assert-fail-*.png`,存截图目录,受清理策略约束)并抛错,错误消息含原因与截图路径。
+
+**回归测试**:agent 跑通一轮流程后 `browser_record save <name>`,以后用 `browser_replay { name }` 一键回放(默认遇错即停,`failFast: false` 可继续);也可直接传 `steps` 数组。已保存录制写入 `$DSH_HOME/.dsh-browser/recordings/<name>.json`(原子替换,名字自动安全化防路径穿越),重启 DSH 后自动加载,可跨会话复用;`browser_record list / delete` 管理。**录制管理界面**:DSH 设置弹窗 → 左侧导航「浏览器」页,可查看列表、展开步骤详情、删除录制。所有工具调用自动记录操作轨迹(面板显示最近 8 条,`/browser/log` 可取全量)。
 
 ## 人工登录(验证码 / 扫码 / 双因素)
 

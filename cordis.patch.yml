@@ -12,6 +12,7 @@
 #   screenshotMaxAgeDays  截图保留天数(0 = 不按时间清理)
 #   screenshotMaxCount    截图保留数量(0 = 不按数量清理)
 #   basePath          面板嵌入 + 实时画面 API 基路径(重启生效,默认 /browser)
+#   recordBodies      网络记录是否保存请求/响应体(默认 true,截断存储)
 #   maxTextChars       browser_snapshot 文本截断上限
 #   maxLinks           browser_snapshot 链接数量上限
 #   timeoutMs         浏览器操作超时(毫秒)

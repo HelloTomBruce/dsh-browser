@@ -6,9 +6,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ReefContext, WebRoute } from "../lib/types.js";
 import type { BrowserConfig } from "./types.js";
-import { activePage, historyOf, currentProfile } from "./session.js";
+import { activePage, historyOf, currentProfile, testLogOf } from "./session.js";
 import { statusTool } from "./tools.js";
-import { urlPath, sendText, sendJson } from "../lib/http.js";
+import { listRecordings, recordingDetail, deleteRecording } from "./recordings.js";
+import { urlPath, sendText, sendJson, readJsonBody } from "../lib/http.js";
 
 export function registerBrowserApi(ctx: ReefContext, config: BrowserConfig, base: string) {
   const webServer = ctx.get<{ register(route: WebRoute): () => void }>("webServer");
@@ -31,6 +32,45 @@ export function registerBrowserApi(ctx: ReefContext, config: BrowserConfig, base
             profile: currentProfile,
             history: [...historyOf(currentProfile)].reverse(),
           });
+          return;
+        }
+        if (path === `${base}/log`) {
+          // 操作轨迹:最近 50 次工具调用,按时间倒序。
+          sendJson(res, 200, {
+            profile: currentProfile,
+            calls: testLogOf().slice(0, 50),
+          });
+          return;
+        }
+        if (path === `${base}/recordings`) {
+          if ((req.method ?? "GET") === "POST") {
+            // 删除录制:body { name }
+            const body = (await readJsonBody(req).catch(() => undefined)) as { name?: unknown } | undefined;
+            const name = typeof body?.name === "string" ? body.name : "";
+            if (!name) {
+              sendText(res, 400, "name required");
+              return;
+            }
+            sendJson(res, 200, { deleted: deleteRecording(name), name });
+            return;
+          }
+          sendJson(res, 200, { recordings: listRecordings() });
+          return;
+        }
+        if (path === `${base}/recordings/detail`) {
+          // 录制步骤详情:?name=xxx
+          let name = "";
+          try {
+            name = new URL(req.url ?? "/", "http://x").searchParams.get("name") ?? "";
+          } catch {
+            /* ignore */
+          }
+          const detail = recordingDetail(name);
+          if (detail === undefined) {
+            sendText(res, 404, `no recording ${name}`);
+            return;
+          }
+          sendJson(res, 200, detail);
           return;
         }
         if (path === `${base}/screenshot`) {
