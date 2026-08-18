@@ -1,0 +1,30 @@
+# dsh-browser bundle layer. 一个插件行:浏览器自动化工具 + 原生界面实时画面面板。
+# 配置可通过用户 profile 的 cordis.patch.yml 覆盖,不需要时删除本行。
+#
+# config 键:
+#   channel           浏览器通道('auto'|'msedge'|'chrome'|'chromium'|'' = playwright 默认)
+#   executablePath    显式浏览器可执行文件(优先于 channel)
+#   headless          无头模式(默认 false = 有头窗口,适合本机调试/人工登录)
+#   userDataDir       登录态持久化目录(设置后 Cookie/localStorage 跨 DSH 重启保留)
+#   profiles          多配置文件:{ work: { userDataDir, channel, headless }, ... }
+#   screenshotDir     截图目录(相对工作区,默认 .dsh-browser/screenshots)
+#   downloadDir       下载目录(默认 .dsh-browser/downloads)
+#   screenshotMaxAgeDays  截图保留天数(0 = 不按时间清理)
+#   screenshotMaxCount    截图保留数量(0 = 不按数量清理)
+#   basePath          面板嵌入 + 实时画面 API 基路径(重启生效,默认 /browser)
+#   maxTextChars       browser_snapshot 文本截断上限
+#   maxLinks           browser_snapshot 链接数量上限
+#   timeoutMs         浏览器操作超时(毫秒)
+- insert:
+    - id: browser
+      name: 'dsh-browser'
+      config:
+        channel: auto
+        headless: false
+        screenshotDir: .dsh-browser/screenshots
+        screenshotMaxAgeDays: 7
+        screenshotMaxCount: 200
+        basePath: /browser
+        maxTextChars: 20000
+        maxLinks: 50
+        timeoutMs: 30000
