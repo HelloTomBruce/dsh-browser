@@ -19,7 +19,13 @@ import type { BrowserConfig } from "./browser/types.js";
 import { applyEmbed } from "./embed.js";
 
 export const name = "dsh-browser";
-export const inject = ["tools", "webServer"];
+// 不声明任何硬性 inject:本插件的两个消费面分布在不同进程——
+// web 宿主进程有 webServer(右下角面板 + /browser/* 路由)但没有 tools,
+// agent 会话进程有 tools(browser_* 工具)但没有 webServer。此 cordis 分支
+// 的 inject 为硬性要求,任一服务缺失整个 fiber 保持 INACTIVE,apply 永不
+// 执行。apply 内部已对 ctx.get() 逐一做 undefined 防御,哪个服务存在就
+// 注册哪一半,因此这里留空即可在两种进程中各取所需。
+export const inject: string[] = [];
 
 const SCHEMA: ConfigSchema = {
   enabled: { type: "boolean", optional: true },
