@@ -18,7 +18,7 @@ import { loadRecordings } from "./browser/recordings.js";
 import type { BrowserConfig } from "./browser/types.js";
 import { applyEmbed } from "./embed.js";
 
-export const name = "dsh-browser";
+export const name = "dsh-browser-view";
 // 不声明任何硬性 inject:本插件的两个消费面分布在不同进程——
 // web 宿主进程有 webServer(右下角面板 + /browser/* 路由)但没有 tools,
 // agent 会话进程有 tools(browser_* 工具)但没有 webServer。此 cordis 分支
@@ -36,6 +36,7 @@ const SCHEMA: ConfigSchema = {
   profiles: { type: "any" },
   screenshotDir: { type: "string" },
   downloadDir: { type: "string" },
+  workspaceDir: { type: "string" },
   screenshotMaxAgeDays: { type: "number", min: 0 },
   screenshotMaxCount: { type: "number", min: 0 },
   basePath: { type: "string" },
@@ -53,6 +54,7 @@ const DEFAULT_CONFIG = {
   profiles: {},
   screenshotDir: ".dsh-browser/screenshots",
   downloadDir: ".dsh-browser/downloads",
+  workspaceDir: "",
   screenshotMaxAgeDays: 7,
   screenshotMaxCount: 200,
   basePath: "/browser",
@@ -63,7 +65,7 @@ const DEFAULT_CONFIG = {
 };
 
 export function apply(ctx: ReefContext, rawConfig: Record<string, any>) {
-  const resolved = resolveConfig("dsh-browser", SCHEMA, DEFAULT_CONFIG, rawConfig);
+  const resolved = resolveConfig("dsh-browser-view", SCHEMA, DEFAULT_CONFIG, rawConfig);
   if (resolved.enabled === false) return;
   const config = resolved as BrowserConfig;
   const base = (config.basePath ?? "/browser").replace(/\/+$/, "");
@@ -71,7 +73,7 @@ export function apply(ctx: ReefContext, rawConfig: Record<string, any>) {
   // 0) 加载磁盘上的录制(持久化回归资产)。
   const loadedRecordings = loadRecordings();
   if (loadedRecordings > 0) {
-    ctx.logger?.info?.(`dsh-browser: loaded ${loadedRecordings} saved recording(s)`);
+    ctx.logger?.info?.(`dsh-browser-view: loaded ${loadedRecordings} saved recording(s)`);
   }
 
   // 1) 注册 browser_* 工具(仅当 tools 服务存在;不存在则插件静默跳过)。
@@ -82,7 +84,7 @@ export function apply(ctx: ReefContext, rawConfig: Record<string, any>) {
   const sectionDispose = systemPrompt?.section?.({
     name: "tool:browser",
     order: 200,
-    text: "浏览器工具操作一个共享浏览器会话,支持多标签页与多配置文件。打开页面后先用 browser_snapshot 读文本与链接、browser_elements 读表单结构,再决定 browser_click / browser_type / browser_form;标签管理用 browser_tabs;下载用 browser_download;登录态用 browser_cookies。做自动化测试时:用 browser_wait_for 显式等待页面稳定/元素出现,用 browser_assert 断言(失败自动截图),用 browser_network 检查接口调用与 4xx/5xx,跑完一轮可用 browser_record save 保存操作序列、browser_replay 回放做回归。遇到需要登录的网站:先 browser_open 打开登录页,告知用户请在浏览器窗口中完成登录,再调用 browser_wait_for_login 等待(可给 successSelector/successUrl);配置 userDataDir 时登录态会持久化。用户可通过界面右下角面板的实时画面查看浏览器。",
+    text: "浏览器工具操作一个共享浏览器会话,支持多标签页与多配置文件。打开页面后先用 browser_snapshot 读文本与链接、browser_elements 读表单结构(含关联 label 与展开的下拉选项),再决定 browser_click / browser_type / browser_form;下拉选择(原生 select 与 antd/element 组件库)用 browser_select 传 selector + option 文本一步完成;标签管理用 browser_tabs;下载用 browser_download(wait=true 可等新下载);登录态用 browser_cookies。做自动化测试时:用 browser_wait_for 显式等待页面稳定/元素出现,用 browser_assert 断言(失败自动截图),用 browser_network 检查接口调用与 4xx/5xx,跑完一轮可用 browser_record save 保存操作序列、browser_replay 回放做回归。遇到需要登录的网站:先 browser_open 打开登录页,告知用户请在浏览器窗口中完成登录,再调用 browser_wait_for_login 等待(可给 successSelector/successUrl);配置 userDataDir 时登录态会持久化。用户可通过界面右下角面板的实时画面查看浏览器。",
   });
   if (sectionDispose !== undefined) ctx.effect(() => sectionDispose);
 
@@ -100,7 +102,7 @@ export function apply(ctx: ReefContext, rawConfig: Record<string, any>) {
     // client 半的服务发现:返回面板/API 基路径(client 用它拼录制管理端点)。
     const disposeConfig = webServer.register({
       kind: "exact",
-      path: "/__dsh-browser__/config",
+      path: "/__dsh-browser-view__/config",
       handler: (_req, res) => {
         sendJson(res, 200, { basePath: base });
       },

@@ -6,7 +6,17 @@ export declare function openTool(config: BrowserConfig, args: Record<string, any
     title: string;
     status: string;
 }>;
+/**
+ * 快照文本压缩(导出供测试):
+ *   - 去掉首尾空白行;
+ *   - 连续空白行折叠为 1 行;
+ *   - 连续重复的非空行(表格空单元格/占位行产生的噪音)折叠为「首行 + …(重复 N 行)」。
+ * 只折叠完全相同的相邻行,不重排、不删改非重复内容。
+ */
+export declare function compressText(text: string): string;
 export declare function snapshotTool(config: BrowserConfig, args: Record<string, any>): Promise<{
+    url: string;
+    title: string;
     text: string;
     truncated: boolean;
     links: {
@@ -14,8 +24,6 @@ export declare function snapshotTool(config: BrowserConfig, args: Record<string,
         href: string;
     }[];
     inputs: number;
-    url: string;
-    title: string;
 }>;
 export declare function clickTool(config: BrowserConfig, args: Record<string, any>): Promise<{
     url: string;
@@ -33,6 +41,17 @@ export declare function pressTool(config: BrowserConfig, args: Record<string, an
     url: string;
     title: string;
     pressed: string;
+}>;
+/**
+ * 下拉选择原语:原生 <select> 走 selectOption;组件库下拉(antd/element/listbox)
+ * 走「点击触发框 → 等待可见选项 → 按文本点击」。找不到选项时抛出错误并附当前可见
+ * 选项清单,agent 可直接据此修正,无需再手写 eval 探查。
+ */
+export declare function selectTool(config: BrowserConfig, args: Record<string, any>): Promise<{
+    url: string;
+    title: string;
+    selected: string;
+    selector: string;
 }>;
 export declare function evalTool(config: BrowserConfig, args: Record<string, any>): Promise<{
     result: unknown;
@@ -189,6 +208,7 @@ export declare function profileTool(config: BrowserConfig, args: Record<string, 
 export declare function elementsTool(config: BrowserConfig, args: Record<string, any>): Promise<{
     count: number;
     elements: Record<string, unknown>[];
+    dropdownOptions: string[];
 }>;
 export declare function closeTool(): Promise<{
     closed: boolean;
@@ -240,15 +260,30 @@ export declare function assertTool(config: BrowserConfig, args: Record<string, a
 /** 网络记录查询:list / failed / wait / clear。 */
 export declare function networkTool(args: Record<string, any>): Promise<{
     cleared: boolean;
-    entries: number;
+    entries: never[];
     matched?: undefined;
     waitMs?: undefined;
+    stats?: undefined;
     failed?: undefined;
 } | {
     matched: import("./session.js").NetworkEntry;
     waitMs: number;
     cleared?: undefined;
     entries?: undefined;
+    stats?: undefined;
+    failed?: undefined;
+} | {
+    stats: {
+        host: string;
+        total: number;
+        failed: number;
+        avgMs: number | null;
+        byStatus: Record<string, number>;
+    }[];
+    cleared?: undefined;
+    entries?: undefined;
+    matched?: undefined;
+    waitMs?: undefined;
     failed?: undefined;
 } | {
     failed: import("./session.js").NetworkEntry[];
@@ -256,11 +291,13 @@ export declare function networkTool(args: Record<string, any>): Promise<{
     entries?: undefined;
     matched?: undefined;
     waitMs?: undefined;
+    stats?: undefined;
 } | {
     entries: import("./session.js").NetworkEntry[];
     cleared?: undefined;
     matched?: undefined;
     waitMs?: undefined;
+    stats?: undefined;
     failed?: undefined;
 }>;
 /** 录制管理:start / stop / save / list / delete。 */
@@ -268,8 +305,6 @@ export declare function recordTool(args: Record<string, any>): Promise<{
     recording: boolean;
     hint: string;
     steps?: undefined;
-    saved?: undefined;
-    file?: undefined;
     recordings?: undefined;
     deleted?: undefined;
     name?: undefined;
@@ -277,16 +312,17 @@ export declare function recordTool(args: Record<string, any>): Promise<{
     recording: boolean;
     steps: number;
     hint?: undefined;
-    saved?: undefined;
-    file?: undefined;
     recordings?: undefined;
     deleted?: undefined;
     name?: undefined;
 } | {
+    hint: string;
+    warnings?: string[] | undefined;
+    stripped?: number | undefined;
     saved: string;
     steps: number;
+    source: string;
     file: string;
-    hint: string;
     recording?: undefined;
     recordings?: undefined;
     deleted?: undefined;
@@ -301,8 +337,6 @@ export declare function recordTool(args: Record<string, any>): Promise<{
     recording?: undefined;
     hint?: undefined;
     steps?: undefined;
-    saved?: undefined;
-    file?: undefined;
     deleted?: undefined;
     name?: undefined;
 } | {
@@ -311,8 +345,6 @@ export declare function recordTool(args: Record<string, any>): Promise<{
     recording?: undefined;
     hint?: undefined;
     steps?: undefined;
-    saved?: undefined;
-    file?: undefined;
     recordings?: undefined;
 }>;
 /** 回放执行器(步骤 → 工具调用),由 register.ts 注入实现 map。 */
@@ -323,7 +355,7 @@ export declare function runReplay(steps: {
     total: number;
     passed: number;
     failed: number;
-    stoppedAt: number | null;
+    stoppedAt?: number;
     results: any[];
 }>;
 /** 回放入口:name(已保存录制)或 steps(数组)二选一。 */
@@ -332,7 +364,7 @@ export declare function replayTool(args: Record<string, any>, impls: Record<stri
     total: number;
     passed: number;
     failed: number;
-    stoppedAt: number | null;
+    stoppedAt?: number;
     results: any[];
     source: string;
 }>;

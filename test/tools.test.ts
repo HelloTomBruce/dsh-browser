@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { definePlainTool, workspaceCwd, genericCard } from "../src/lib/tools.js";
+import { resolve } from "node:path";
+import { definePlainTool, workspaceCwd, workspaceBaseDir, genericCard } from "../src/lib/tools.js";
 
 describe("definePlainTool", () => {
   it("生成完整 ToolDefinition 形状", () => {
@@ -74,6 +75,24 @@ describe("workspaceCwd", () => {
   it("缺失时回退进程 cwd", () => {
     expect(workspaceCwd(undefined)).toBe(process.cwd());
     expect(workspaceCwd({} as any)).toBe(process.cwd());
+  });
+});
+
+describe("workspaceBaseDir", () => {
+  it("config.workspaceDir 绝对路径优先", () => {
+    const dir = workspaceBaseDir({ workspaceDir: "/tmp/explicit" }, { agent: { session: { meta: { cwd: "/tmp/x" } } } } as any);
+    expect(dir).toBe("/tmp/explicit");
+  });
+
+  it("config.workspaceDir 相对路径按 process.cwd() 解析", () => {
+    const dir = workspaceBaseDir({ workspaceDir: "sub/dir" }, undefined);
+    expect(dir).toBe(resolve(process.cwd(), "sub/dir"));
+  });
+
+  it("未配置时回退会话 cwd 探测链", () => {
+    expect(workspaceBaseDir({}, { agent: { session: { meta: { cwd: "/tmp/x" } } } } as any)).toBe("/tmp/x");
+    expect(workspaceBaseDir({}, { cwd: "/tmp/y" } as any)).toBe("/tmp/y");
+    expect(workspaceBaseDir({}, undefined)).toBe(process.cwd());
   });
 });
 

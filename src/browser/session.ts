@@ -21,6 +21,8 @@ export let lastFormFields: FormField[] = [];
 export const savedRecordings = new Map<string, { steps: { tool: string; args: any }[]; savedAt: number }>();
 /** 当前录制中的 buffer(非空 = 录制中)。 */
 let recordingSteps: TestCall[] | null = null;
+/** 最近一次 start→stop 的录制结果(save 优先使用;下次 start 时覆盖)。 */
+let lastRecording: TestCall[] | null = null;
 
 /** 一次工具调用的记录(操作轨迹 / 录制 / 回放共用)。 */
 export interface TestCall {
@@ -40,13 +42,20 @@ export function isRecording(): boolean {
 }
 
 export function startRecording(): void {
+  lastRecording = null; // 新一轮录制使上一次结果失效
   recordingSteps = [];
 }
 
 export function stopRecording(): TestCall[] {
   const steps = recordingSteps ?? [];
   recordingSteps = null;
+  lastRecording = steps;
   return steps;
+}
+
+/** 最近一次完整录制(start→stop)的 buffer;从未录制过返回 null。 */
+export function lastRecordingOf(): TestCall[] | null {
+  return lastRecording;
 }
 
 /** 操作轨迹追加(同时写入录制 buffer,排除 record/replay 自身)。 */

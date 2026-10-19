@@ -1,16 +1,26 @@
 /**
- * dsh-browser browser half: a "浏览器" page in the official dsh settings
- * dialog (settings.section seat) that manages saved browser recordings —
- * list, expand steps, delete. Data flows to the node half through the
- * plugin's own same-origin HTTP endpoints (base path discovered from
- * /__dsh-browser__/config).
+ * dsh-browser-view client half:
+ * 1. "settings.section" -> A "🌐 浏览器" page in the official dsh settings
+ *    dialog managing saved browser recordings with polished header & icon.
+ * 2. "shell.overlay" -> Universal floating widget (FAB + live screenshot
+ *    thumbnail panel + full-size inspection modal) rendered natively in both
+ *    Electron desktop and web client.
  */
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client';
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+    interface SlotMap {
+        'shell.overlay': {
+            kind: 'list';
+            scope: 'root';
+        };
+    }
+}
 /** Required services (cordis fiber inject). */
 export declare const inject: string[];
 /**
- * Register the "浏览器" settings page: nav entry + recordings management.
- * @param ctx - the browser plugin context.
+ * Register the browser extension components:
+ * 1. settings.section -> "🌐 浏览器" page in settings
+ * 2. shell.overlay -> Universal floating live screenshot widget (Desktop & Web)
  */
 export declare function apply(ctx: ClientContext): void;
 //# sourceMappingURL=index.d.ts.map

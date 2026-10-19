@@ -28,6 +28,8 @@ export interface TestCall {
 export declare function isRecording(): boolean;
 export declare function startRecording(): void;
 export declare function stopRecording(): TestCall[];
+/** 最近一次完整录制(start→stop)的 buffer;从未录制过返回 null。 */
+export declare function lastRecordingOf(): TestCall[] | null;
 /** 操作轨迹追加(同时写入录制 buffer,排除 record/replay 自身)。 */
 export declare function recordCall(call: TestCall): void;
 /** 操作轨迹(按时间倒序,最新在前)。 */

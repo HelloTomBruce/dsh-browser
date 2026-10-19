@@ -1,10 +1,10 @@
-# dsh-browser
+# dsh-browser-view
 
 DSH 插件:共享 Playwright 浏览器自动化 + 原生界面实时画面面板。一次安装,两件事:
 
 | 模块 | 做什么 |
 | --- | --- |
-| 🧭 **浏览器自动化** | 共享 Playwright 浏览器:多标签、多 profile、下载/上传、Cookie、表单回放,22 个 `browser_*` 工具 |
+| 🧭 **浏览器自动化** | 共享 Playwright 浏览器:多标签、多 profile、下载/上传、Cookie、表单回放,28 个 `browser_*` 工具 |
 | 🖥️ **实时画面** | 注入 DSH 界面右下角悬浮面板:浏览器状态 + 实时缩略图,点开大屏模态框(2 秒轮询画面 + 访问历史) |
 
 设计原则:能做的一次性操作交给 agent 用 bash 完成,插件只做 bash 做不到的常驻浏览器自动化。唯一第三方运行时依赖是 `playwright-core`(复用系统已装的 Edge/Chrome,无需下载 Chromium),不依赖任何 `@deepseek-ai` 运行时包。
@@ -12,7 +12,7 @@ DSH 插件:共享 Playwright 浏览器自动化 + 原生界面实时画面面板
 ## 安装
 
 ```sh
-dsh plugin --profile web add dsh-browser
+dsh plugin --profile web add dsh-browser-view
 ```
 
 重启 DSH 生效。不需要时在 `$DSH_HOME/profiles/web/cordis.patch.yml` 里删除 `browser` 行或加 `config: { enabled: false }`。
@@ -22,13 +22,14 @@ dsh plugin --profile web add dsh-browser
 ```yaml
 - insert:
     - id: browser
-      name: 'dsh-browser'
+      name: 'dsh-browser-view'
       config:
         channel: auto        # auto | msedge | chrome | chromium | ""(playwright 默认)
         executablePath: ""   # 显式指定浏览器可执行文件(优先于 channel)
         headless: false      # 默认有头(本机调试/人工登录);服务器场景可改 true
         userDataDir: ""      # 设置后登录态跨 DSH 重启保留
         profiles: {}         # { work: { userDataDir, channel, headless }, ... }
+        workspaceDir: ""     # 截图/下载/上传的落盘基准目录(默认探测会话 cwd,多工作区/服务器场景可钉死)
         screenshotDir: .dsh-browser/screenshots
         downloadDir: .dsh-browser/downloads
         screenshotMaxAgeDays: 7   # 截图保留天数(0 = 不按时间清理)
@@ -45,20 +46,21 @@ dsh plugin --profile web add dsh-browser
 | --- | --- |
 | `browser_open` | 打开 URL |
 | `browser_tabs` | 标签管理:list / new / switch / close(按 id 或 index) |
-| `browser_snapshot` | 读取页面文本/链接/输入框(纯文本模型"看"网页的核心) |
-| `browser_elements` | 可交互元素结构化清单(input/button/select/链接 + 现成 CSS 选择器) |
+| `browser_snapshot` | 读取页面文本/链接/输入框(纯文本模型"看"网页的核心;连续空白/重复行自动折叠降噪) |
+| `browser_elements` | 可交互元素结构化清单(input/button/select/链接 + 关联 label + 现成 CSS 选择器;有展开下拉时附可见选项) |
 | `browser_click` / `browser_type` / `browser_press` | 点击 / 输入(可清空、可回车提交)/ 按键 |
+| `browser_select` | 下拉选择原语:原生 `<select>` 与 antd / element-plus / ARIA listbox 通用,selector + option 文本一步完成;找不到选项时报错并列出可见选项 |
 | `browser_eval` | 在页面上下文执行 JS(结果自动净化成 lossless JSON) |
 | `browser_screenshot` | 截图存为 PNG(自动清理,见下) |
 | `browser_wait` / `browser_back` / `browser_reload` | 等待 / 后退 / 刷新 |
 | `browser_wait_for_login` | 等待人工登录完成(配 `headless: false` 使用,见下) |
 | `browser_wait_for` | 通用显式等待(元素状态 / URL / 文本 / 数量 / eval,超时抛错) |
 | `browser_assert` | 结构化断言(失败自动截图存证据目录并报错) |
-| `browser_network` | 接口记录查询:list / failed(4xx/5xx)/ wait / clear,含请求/响应体(截断) |
-| `browser_record` | 操作录制:start / stop / save / list / delete |
+| `browser_network` | 接口记录查询:list / failed(4xx/5xx)/ wait(命中返回 waitMs,超时附最近请求摘要)/ stats(按 host 聚合计数/失败数/均耗时/状态码分布)/ clear,含请求/响应体(截断) |
+| `browser_record` | 操作录制:start / stop / save(list/delete 管理;save 支持 `stripReads: true` 剔除只读探查步骤) |
 | `browser_replay` | 回放录制或步骤序列(回归测试,遇错可停) |
 | `browser_status` / `browser_close` | 状态 / 关闭会话 |
-| `browser_download` / `browser_upload` | 下载(保存到工作区)/ 上传本地文件 |
+| `browser_download` / `browser_upload` | 下载(保存到工作区;`wait: true` 可轮询等待新下载)/ 上传本地文件 |
 | `browser_cookies` | Cookie 管理(list / set / clear,登录态处理) |
 | `browser_form` / `browser_form_save` / `browser_forms` | 批量填表 / 保存回放 / 管理已存表单 |
 | `browser_profile` | 多配置文件:work/personal 等独立会话与登录态(userDataDir 持久化) |
@@ -96,7 +98,7 @@ browser_screenshot  # 证据
 
 `browser_assert` 失败时自动截图(`assert-fail-*.png`,存截图目录,受清理策略约束)并抛错,错误消息含原因与截图路径。
 
-**回归测试**:agent 跑通一轮流程后 `browser_record save <name>`,以后用 `browser_replay { name }` 一键回放(默认遇错即停,`failFast: false` 可继续);也可直接传 `steps` 数组。已保存录制写入 `$DSH_HOME/.dsh-browser/recordings/<name>.json`(原子替换,名字自动安全化防路径穿越),重启 DSH 后自动加载,可跨会话复用;`browser_record list / delete` 管理。**录制管理界面**:DSH 设置弹窗 → 左侧导航「浏览器」页,可查看列表、展开步骤详情、删除录制。所有工具调用自动记录操作轨迹(面板显示最近 8 条,`/browser/log` 可取全量)。
+**回归测试**:agent 跑通一轮流程后 `browser_record save <name>`,以后用 `browser_replay { name }` 一键回放(默认遇错即停,`failFast: false` 可继续);也可直接传 `steps` 数组。**save 的数据源**:做过 `browser_record start` → `stop` 的,保存该段录制;从未录制的,保存最近 100 次工具调用(返回值的 `source` 字段会标明 `recording` / `recent-log`)。save 时会检查 `browser_upload` 步骤引用的本地文件,缺失的以 `warnings` 返回(回放将失败,请及时重建或改用稳定路径)。已保存录制写入 `$DSH_HOME/.dsh-browser/recordings/<name>.json`(原子替换,名字自动安全化防路径穿越),重启 DSH 后自动加载,可跨会话复用;`browser_record list / delete` 管理。**录制管理界面**:DSH 设置弹窗 → 左侧导航「浏览器」页,可查看列表、展开步骤详情、删除录制。所有工具调用自动记录操作轨迹(面板显示最近 8 条,`/browser/log` 可取全量)。
 
 ## 人工登录(验证码 / 扫码 / 双因素)
 

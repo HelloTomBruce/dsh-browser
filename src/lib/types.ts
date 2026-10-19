@@ -26,6 +26,8 @@ export interface ToolRunContext {
       meta?: { cwd?: string };
     };
   };
+  /** 部分宿主直接给执行上下文挂 cwd(次于 session.meta.cwd 的候选)。 */
+  cwd?: string;
   callId?: string;
 }
 

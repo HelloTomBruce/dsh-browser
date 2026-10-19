@@ -12,7 +12,8 @@ const impls = {
 describe("runReplay", () => {
   it("全部通过时统计正确", async () => {
     const r = await runReplay([{ tool: "a", args: {} }, { tool: "c", args: {} }], impls, true);
-    expect(r).toMatchObject({ total: 2, passed: 2, failed: 0, stoppedAt: null });
+    expect(r).toMatchObject({ total: 2, passed: 2, failed: 0 });
+    expect(r.stoppedAt).toBeUndefined(); // 未停止时省略该字段(outputSchema 为 integer)
     expect(r.results.every((x) => x.ok)).toBe(true);
   });
 
@@ -32,7 +33,8 @@ describe("runReplay", () => {
       impls,
       false,
     );
-    expect(r).toMatchObject({ total: 3, passed: 2, failed: 1, stoppedAt: null });
+    expect(r).toMatchObject({ total: 3, passed: 2, failed: 1 });
+    expect(r.stoppedAt).toBeUndefined();
   });
 
   it("未知工具记录为失败", async () => {
@@ -43,6 +45,7 @@ describe("runReplay", () => {
 
   it("空步骤返回零统计", async () => {
     const r = await runReplay([], impls, true);
-    expect(r).toMatchObject({ total: 0, passed: 0, failed: 0, stoppedAt: null });
+    expect(r).toMatchObject({ total: 0, passed: 0, failed: 0 });
+    expect(r.stoppedAt).toBeUndefined();
   });
 });

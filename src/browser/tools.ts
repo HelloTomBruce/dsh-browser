@@ -1,5 +1,5 @@
 // dsh-browser · 浏览器 — 工具实现(22 个 browser_* 函数)
-import { mkdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve, isAbsolute } from "node:path";
 import type { Page } from "playwright-core";
 import type { ToolRunContext } from "../lib/types.js";
@@ -9,11 +9,11 @@ import {
   getPage, activePage, tabList, closeBrowser, pageIdentity, stateOf,
   currentProfile, savedForms, lastFormFields, profileStates, setLastFormFields, setCurrentProfile,
   noteScreenshotDir, cleanupScreenshots,
-  networkEntries, clearNetwork, savedRecordings, startRecording, stopRecording,
+  networkEntries, clearNetwork, savedRecordings, startRecording, stopRecording, lastRecordingOf,
   testLogOf, clearTestLog, isRecording, type TestCall,
 } from "./session.js";
 import { saveRecordingFile, listRecordings, deleteRecording } from "./recordings.js";
-import { workspaceCwd } from "../lib/tools.js";
+import { workspaceBaseDir } from "../lib/tools.js";
 
 export async function openTool(config: BrowserConfig, args: Record<string, any>) {
   const page = await getPage(config);
@@ -26,6 +26,39 @@ export async function openTool(config: BrowserConfig, args: Record<string, any>)
     title: await page.title(),
     status: "ok",
   };
+}
+
+/**
+ * 快照文本压缩(导出供测试):
+ *   - 去掉首尾空白行;
+ *   - 连续空白行折叠为 1 行;
+ *   - 连续重复的非空行(表格空单元格/占位行产生的噪音)折叠为「首行 + …(重复 N 行)」。
+ * 只折叠完全相同的相邻行,不重排、不删改非重复内容。
+ */
+export function compressText(text: string): string {
+  const lines = text.split("\n");
+  const out: string[] = [];
+  let blankRun = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (trimmed === "") {
+      blankRun++;
+      if (blankRun === 1 && out.length > 0) out.push("");
+      continue;
+    }
+    blankRun = 0;
+    // 统计当前行与后续相同行的重复次数
+    let dup = 0;
+    while (i + dup + 1 < lines.length && lines[i + dup + 1].trim() === trimmed) dup++;
+    out.push(lines[i]);
+    if (dup > 0) {
+      out.push(`…(重复 ${dup} 行)`);
+      i += dup;
+    }
+  }
+  // 去掉尾部空白行
+  while (out.length > 0 && out[out.length - 1] === "") out.pop();
+  return out.join("\n");
 }
 
 export async function snapshotTool(config: BrowserConfig, args: Record<string, any>) {
@@ -42,14 +75,18 @@ export async function snapshotTool(config: BrowserConfig, args: Record<string, a
           href: a.href,
         }));
       const inputs = document.querySelectorAll("input, textarea, select").length;
-      return { text: text.slice(0, maxT), truncated: text.length > maxT, links, inputs };
+      return { text, links, inputs };
     },
     [maxText, maxLinks],
   );
+  const compressed = compressText(data.text);
   return {
     url: page.url(),
     title: await page.title(),
-    ...data,
+    text: compressed.slice(0, maxText),
+    truncated: compressed.length > maxText,
+    links: data.links,
+    inputs: data.inputs,
   };
 }
 
@@ -96,6 +133,59 @@ export async function pressTool(config: BrowserConfig, args: Record<string, any>
   return { pressed: key, ...(await pageIdentity(page)) };
 }
 
+/** 组件库下拉框的可见选项选择器并集(antd / element-plus / 通用 ARIA listbox)。 */
+const DROPDOWN_OPTION_SELECTOR = [
+  ".ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option",
+  ".el-select-dropdown__item",
+  "[role='listbox'] [role='option']",
+].join(", ");
+
+/**
+ * 下拉选择原语:原生 <select> 走 selectOption;组件库下拉(antd/element/listbox)
+ * 走「点击触发框 → 等待可见选项 → 按文本点击」。找不到选项时抛出错误并附当前可见
+ * 选项清单,agent 可直接据此修正,无需再手写 eval 探查。
+ */
+export async function selectTool(config: BrowserConfig, args: Record<string, any>) {
+  const page = await getPage(config);
+  const selector = String(args.selector);
+  const want = String(args.option ?? "");
+  if (!want) throw new Error("select 需要 option(选项文本)");
+  const exact = args.exact === true;
+  const timeout = args.timeoutMs ?? config.timeoutMs;
+
+  // 1) 原生 <select>
+  const tag = await page
+    .locator(selector)
+    .first()
+    .evaluate((el) => el.tagName.toLowerCase())
+    .catch(() => "");
+  if (tag === "select") {
+    try {
+      await page.locator(selector).selectOption({ label: want }, { timeout });
+      return { selected: want, selector, ...(await pageIdentity(page)) };
+    } catch {
+      const options = await page.locator(`${selector} option`).allTextContents();
+      throw new Error(`原生下拉无选项 "${want}";可用选项: ${options.map((t) => t.trim()).join(" / ")}`);
+    }
+  }
+
+  // 2) 组件库下拉:点击触发框展开
+  await page.click(selector, { timeout });
+  const options = page.locator(DROPDOWN_OPTION_SELECTOR);
+  await options.first().waitFor({ state: "visible", timeout: Math.min(timeout, 5_000) }).catch(() => {});
+  const texts = (await options.allTextContents()).map((t) => t.trim()).filter(Boolean);
+  if (texts.length === 0) {
+    throw new Error(`点击 ${selector} 后未出现下拉选项(非原生 select,也不是已知的组件库下拉)`);
+  }
+  const index = texts.findIndex((t) => (exact ? t === want : t.includes(want)));
+  if (index === -1) {
+    await page.keyboard.press("Escape").catch(() => {}); // 收起下拉,保持现场干净
+    throw new Error(`下拉选项中无 "${want}";可见选项: ${texts.join(" / ")}`);
+  }
+  await options.nth(index).click();
+  return { selected: texts[index], selector, ...(await pageIdentity(page)) };
+}
+
 export async function evalTool(config: BrowserConfig, args: Record<string, any>) {
   const page = await getPage(config);
   const script = String(args.script ?? "");
@@ -116,7 +206,7 @@ export async function evalTool(config: BrowserConfig, args: Record<string, any>)
 
 export async function screenshotTool(config: BrowserConfig, args: Record<string, any>, exec?: ToolRunContext) {
   const page = await getPage(config);
-  const cwd = workspaceCwd(exec);
+  const cwd = workspaceBaseDir(config, exec);
   const screenshotDir = config.screenshotDir ?? ".dsh-browser/screenshots";
   const dir = isAbsolute(screenshotDir) ? screenshotDir : resolve(cwd, screenshotDir);
   mkdirSync(dir, { recursive: true });
@@ -247,14 +337,27 @@ export function resolveTabId(args: Record<string, any>): number {
 }
 
 export async function downloadTool(config: BrowserConfig, args: Record<string, any>, exec?: ToolRunContext) {
-  const recentDownloads = downloadsOf(currentProfile);
+  let recentDownloads = downloadsOf(currentProfile);
+  // wait:true 时以当前下载数为基线,轮询等待新下载出现,消除 browser_wait 盲等。
+  if (args.wait === true) {
+    const timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? 10_000) || 10_000, 1_000), 60_000);
+    const baseline = recentDownloads.length;
+    const deadline = Date.now() + timeoutMs;
+    while (recentDownloads.length <= baseline && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 300));
+      recentDownloads = downloadsOf(currentProfile);
+    }
+    if (recentDownloads.length <= baseline) {
+      throw new Error(`等待下载超时(${timeoutMs}ms):未检测到新下载,请先在页面触发下载动作`);
+    }
+  }
   if (recentDownloads.length === 0) {
     throw new Error("no recent downloads. Trigger a download in the page first (e.g. browser_click on a download link).");
   }
   const index = args.index !== undefined ? Number(args.index) : recentDownloads.length - 1;
   const entry = recentDownloads[index];
   if (entry === undefined) throw new Error(`no download at index ${index}`);
-  const cwd = workspaceCwd(exec);
+  const cwd = workspaceBaseDir(config, exec);
   const downloadDir = config.downloadDir ?? ".dsh-browser/downloads";
   const dir = isAbsolute(downloadDir) ? downloadDir : resolve(cwd, downloadDir);
   mkdirSync(dir, { recursive: true });
@@ -272,7 +375,7 @@ export async function downloadTool(config: BrowserConfig, args: Record<string, a
 
 export async function uploadTool(config: BrowserConfig, args: Record<string, any>, exec?: ToolRunContext) {
   const page = await getPage(config);
-  const cwd = workspaceCwd(exec);
+  const cwd = workspaceBaseDir(config, exec);
   const filePath = isAbsolute(args.path) ? String(args.path) : resolve(cwd, String(args.path));
   let stat;
   try {
@@ -425,40 +528,66 @@ export async function profileTool(config: BrowserConfig, args: Record<string, an
 export async function elementsTool(config: BrowserConfig, args: Record<string, any>) {
   const page = await getPage(config);
   const max = Math.min(Math.max(Number(args.max ?? 60) || 60, 1), 200);
-  const elements = await page.evaluate((maxN: number) => {
-    const out: Record<string, unknown>[] = [];
-    const seen = new Set<string>();
-    const nodes = Array.from(
-      document.querySelectorAll("input, textarea, select, button, a[href]"),
-    ) as HTMLElement[];
-    for (const el of nodes) {
-      if (out.length >= maxN) break;
-      const rect = el.getBoundingClientRect();
-      if (rect.width === 0 && rect.height === 0) continue;
-      const info = {
-        tag: el.tagName.toLowerCase(),
-        type: (el as HTMLInputElement).type ?? "",
-        name: (el as HTMLInputElement).name ?? "",
-        id: el.id ?? "",
-        placeholder: (el as HTMLInputElement).placeholder ?? "",
-        ariaLabel: el.getAttribute("aria-label") ?? "",
-        text: (el.innerText || el.textContent || "").trim().slice(0, 80),
-        href: (el as HTMLAnchorElement).href ?? "",
-        selector:
-          el.id !== ""
-            ? `#${CSS.escape(el.id)}`
-            : (el as HTMLInputElement).name !== ""
-              ? `${el.tagName.toLowerCase()}[name="${(el as HTMLInputElement).name}"]`
-              : "",
-      };
-      const key = `${info.tag}|${info.name}|${info.id}|${info.placeholder}|${info.text}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(info);
-    }
-    return out;
-  }, max);
-  return { count: elements.length, elements };
+  const data = await page.evaluate(
+    ([maxN, optionSelector]) => {
+      /** 提取元素的关联 label:aria-label → label[for] → form-item 标签(antd/element)。 */
+      function labelOf(el: HTMLElement): string {
+        const aria = el.getAttribute("aria-label");
+        if (aria) return aria.trim();
+        if (el.id) {
+          const forLabel = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+          const text = forLabel?.textContent?.trim();
+          if (text) return text;
+        }
+        const antItem = el.closest(".ant-form-item");
+        const antLabel = antItem?.querySelector(".ant-form-item-label")?.textContent?.trim();
+        if (antLabel) return antLabel.replace(/[*：:]\s*$/, "");
+        const elItem = el.closest(".el-form-item");
+        const elLabel = elItem?.querySelector(".el-form-item__label")?.textContent?.trim();
+        if (elLabel) return elLabel.replace(/[*：:]\s*$/, "");
+        return "";
+      }
+      const out: Record<string, unknown>[] = [];
+      const seen = new Set<string>();
+      const nodes = Array.from(
+        document.querySelectorAll("input, textarea, select, button, a[href]"),
+      ) as HTMLElement[];
+      for (const el of nodes) {
+        if (out.length >= maxN) break;
+        const rect = el.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) continue;
+        const info = {
+          tag: el.tagName.toLowerCase(),
+          type: (el as HTMLInputElement).type ?? "",
+          name: (el as HTMLInputElement).name ?? "",
+          id: el.id ?? "",
+          label: labelOf(el),
+          placeholder: (el as HTMLInputElement).placeholder ?? "",
+          ariaLabel: el.getAttribute("aria-label") ?? "",
+          text: (el.innerText || el.textContent || "").trim().slice(0, 80),
+          href: (el as HTMLAnchorElement).href ?? "",
+          selector:
+            el.id !== ""
+              ? `#${CSS.escape(el.id)}`
+              : (el as HTMLInputElement).name !== ""
+                ? `${el.tagName.toLowerCase()}[name="${(el as HTMLInputElement).name}"]`
+                : "",
+        };
+        const key = `${info.tag}|${info.name}|${info.id}|${info.placeholder}|${info.text}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(info);
+      }
+      // 展开中的组件库下拉:把可见选项一并列出(agent 无需再 eval 探查)。
+      const dropdownOptions = Array.from(document.querySelectorAll(optionSelector))
+        .map((el) => (el.textContent ?? "").trim())
+        .filter(Boolean)
+        .slice(0, 50);
+      return { elements: out, dropdownOptions };
+    },
+    [max, DROPDOWN_OPTION_SELECTOR] as const,
+  );
+  return { count: data.elements.length, elements: data.elements, dropdownOptions: data.dropdownOptions };
 }
 
 export async function closeTool() {
@@ -603,7 +732,7 @@ export async function assertTool(config: BrowserConfig, args: Record<string, any
     return { passed: true, ...(await pageIdentity(page)) };
   }
   // 失败:自动截图存证据目录,抛错携带原因与路径。
-  const cwd = workspaceCwd(exec);
+  const cwd = workspaceBaseDir(config, exec);
   const screenshotDir = config.screenshotDir ?? ".dsh-browser/screenshots";
   const dir = isAbsolute(screenshotDir) ? screenshotDir : resolve(cwd, screenshotDir);
   mkdirSync(dir, { recursive: true });
@@ -636,12 +765,13 @@ export async function networkTool(args: Record<string, any>) {
   const entries = networkEntries(currentProfile);
   if (action === "clear") {
     clearNetwork(currentProfile);
-    return { cleared: true, entries: 0 };
+    return { cleared: true, entries: [] };
   }
   if (action === "wait") {
     if (!args.url) throw new Error("wait 需要 url(正则字符串)");
     const timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? 10_000) || 10_000, 1_000), 60_000);
-    const deadline = Date.now() + timeoutMs;
+    const startedAt = Date.now();
+    const deadline = startedAt + timeoutMs;
     while (Date.now() < deadline) {
       const hit = [...entries]
         .reverse()
@@ -650,16 +780,75 @@ export async function networkTool(args: Record<string, any>) {
           if (args.status !== undefined && Number(args.status) !== e.status) return false;
           return true;
         });
-      if (hit !== undefined) return { matched: hit, waitMs: Date.now() + timeoutMs - deadline - (Date.now() + timeoutMs - deadline) + 0 };
+      if (hit !== undefined) return { matched: hit, waitMs: Date.now() - startedAt };
       await new Promise((r) => setTimeout(r, 300));
     }
-    throw new Error(`等待接口超时(${timeoutMs}ms): ${args.url}`);
+    // 超时:附最近 5 条已见请求,帮助区分「正则没写对」与「请求根本没发」。
+    const recent = entries.slice(-5).map(
+      (e) => `${e.method} ${e.url} → ${e.failed ? "FAILED" : (e.status ?? "?")}`,
+    );
+    throw new Error(
+      `等待接口超时(${timeoutMs}ms): ${args.url}\n` +
+        (recent.length > 0 ? `最近已见请求:\n  ${recent.join("\n  ")}` : "期间无任何接口请求记录"),
+    );
   }
   const filter = action === "failed" ? { failedOnly: true } : args;
   const list = [...entries].reverse().filter((e) => matchNetwork(e, filter)).slice(0, Math.min(Math.max(Number(args.limit ?? 50) || 50, 1), 200));
+  if (action === "stats") {
+    // 按 host 聚合:总数/失败数/平均耗时/状态码分布(测试收尾一屏看完)。
+    const byHost = new Map<string, { host: string; total: number; failed: number; totalMs: number; withDuration: number; byStatus: Record<string, number> }>();
+    for (const e of entries) {
+      let host: string;
+      try {
+        host = new URL(e.url).host;
+      } catch {
+        host = "(invalid-url)";
+      }
+      let bucket = byHost.get(host);
+      if (bucket === undefined) {
+        bucket = { host, total: 0, failed: 0, totalMs: 0, withDuration: 0, byStatus: {} };
+        byHost.set(host, bucket);
+      }
+      bucket.total++;
+      if (e.failed === true || (e.status !== undefined && e.status >= 400)) bucket.failed++;
+      if (e.durationMs !== undefined) {
+        bucket.totalMs += e.durationMs;
+        bucket.withDuration++;
+      }
+      if (e.status !== undefined) {
+        const key = String(e.status);
+        bucket.byStatus[key] = (bucket.byStatus[key] ?? 0) + 1;
+      }
+    }
+    const stats = [...byHost.values()]
+      .map((b) => ({
+        host: b.host,
+        total: b.total,
+        failed: b.failed,
+        avgMs: b.withDuration > 0 ? Math.round(b.totalMs / b.withDuration) : null,
+        byStatus: b.byStatus,
+      }))
+      .sort((a, b) => b.total - a.total);
+    return { stats };
+  }
   if (action === "failed") return { failed: list };
   if (action === "list") return { entries: list };
   throw new Error(`unknown network action: ${action}`);
+}
+
+/** 只读工具集合:stripReads 保存时剔除(browser_cookies 仅 list 动作算只读)。 */
+const READONLY_TOOLS = new Set([
+  "browser_snapshot",
+  "browser_elements",
+  "browser_eval",
+  "browser_network",
+  "browser_status",
+]);
+
+function isReadonlyStep(step: { tool: string; args: any }): boolean {
+  if (READONLY_TOOLS.has(step.tool)) return true;
+  if (step.tool === "browser_cookies") return (step.args?.action ?? "list") === "list";
+  return false;
 }
 
 /** 录制管理:start / stop / save / list / delete。 */
@@ -678,10 +867,36 @@ export async function recordTool(args: Record<string, any>) {
     if (isRecording()) throw new Error("录制未结束:先 browser_record stop");
     const name = String(args.name ?? "");
     if (!name) throw new Error("save 需要 name");
-    const steps = testLogOf().reverse().slice(-100).map((c) => ({ tool: c.tool, args: c.args ?? {} }));
+    // 数据源:优先最近一次完整录制(start→stop);从未录制则回退到全局轨迹最近 100 条。
+    const recorded = lastRecordingOf();
+    const source = recorded !== null ? "recording" : "recent-log";
+    const rawSteps = recorded !== null
+      ? recorded.map((c) => ({ tool: c.tool, args: c.args ?? {} }))
+      : testLogOf().reverse().slice(-100).map((c) => ({ tool: c.tool, args: c.args ?? {} }));
+    // stripReads: 剔除只读探查步骤(snapshot/elements/eval/network/status/cookies list),
+    // 让回放更聚焦操作路径。注意 browser_eval 可能有副作用,默认关闭由调用方判断。
+    const steps = args.stripReads === true ? rawSteps.filter((s) => !isReadonlyStep(s)) : rawSteps;
+    const stripped = rawSteps.length - steps.length;
     savedRecordings.set(name, { steps, savedAt: Date.now() });
     const file = saveRecordingFile(name, steps);
-    return { saved: name, steps: steps.length, file, hint: "已持久化到磁盘,重启 DSH 后仍可回放" };
+    // 外部依赖检查:upload 步骤引用的本地文件不存在时预警(回放将失败)。
+    const warnings: string[] = [];
+    steps.forEach((s, i) => {
+      if (s.tool !== "browser_upload") return;
+      const p = s.args?.path;
+      if (typeof p === "string" && p.length > 0 && !existsSync(p)) {
+        warnings.push(`#${i + 1} browser_upload: 文件不存在 ${p},回放此步骤将失败`);
+      }
+    });
+    return {
+      saved: name,
+      steps: steps.length,
+      source,
+      file,
+      ...(stripped > 0 ? { stripped } : {}),
+      ...(warnings.length > 0 ? { warnings } : {}),
+      hint: "已持久化到磁盘,重启 DSH 后仍可回放",
+    };
   }
   if (action === "list") {
     return { recordings: listRecordings() };
@@ -700,7 +915,7 @@ export async function runReplay(
   steps: { tool: string; args: any }[],
   impls: Record<string, (args: any) => Promise<unknown>>,
   failFast: boolean,
-): Promise<{ total: number; passed: number; failed: number; stoppedAt: number | null; results: any[] }> {
+): Promise<{ total: number; passed: number; failed: number; stoppedAt?: number; results: any[] }> {
   const results: any[] = [];
   let stoppedAt: number | null = null;
   let passed = 0;
@@ -721,7 +936,14 @@ export async function runReplay(
       if (failFast) { stoppedAt = i; break; }
     }
   }
-  return { total: steps.length, passed, failed: results.length - passed, stoppedAt, results };
+  return {
+    total: steps.length,
+    passed,
+    failed: results.length - passed,
+    // null 不输出:outputSchema 中 stoppedAt 为 integer,省略比 null 兼容性更稳。
+    ...(stoppedAt !== null ? { stoppedAt } : {}),
+    results,
+  };
 }
 
 /** 回放入口:name(已保存录制)或 steps(数组)二选一。 */
@@ -744,5 +966,10 @@ export async function replayTool(
   if (steps.length === 0) throw new Error("步骤为空");
   const failFast = args.failFast !== false;
   const result = await runReplay(steps, impls, failFast);
-  return { source, ...result, summary: `${result.passed}/${result.total} 通过${result.failed > 0 ? `, ${result.failed} 失败${result.stoppedAt !== null ? `(停在步骤 ${result.stoppedAt})` : ""}` : ""}` };
+  const stoppedAt = (result as { stoppedAt?: number }).stoppedAt;
+  return {
+    source,
+    ...result,
+    summary: `${result.passed}/${result.total} 通过${result.failed > 0 ? `, ${result.failed} 失败${stoppedAt !== undefined ? `(停在步骤 ${stoppedAt})` : ""}` : ""}`,
+  };
 }
