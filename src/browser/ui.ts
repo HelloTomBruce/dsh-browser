@@ -9,6 +9,7 @@ import type { BrowserConfig } from "./types.js";
 import { activePage, historyOf, currentProfile, testLogOf } from "./session.js";
 import { statusTool } from "./tools.js";
 import { listRecordings, recordingDetail, deleteRecording } from "./recordings.js";
+import { latestRun } from "./reports.js";
 import { urlPath, sendText, sendJson, readJsonBody } from "../lib/http.js";
 
 export function registerBrowserApi(ctx: ReefContext, config: BrowserConfig, base: string) {
@@ -40,6 +41,11 @@ export function registerBrowserApi(ctx: ReefContext, config: BrowserConfig, base
             profile: currentProfile,
             calls: testLogOf().slice(0, 50),
           });
+          return;
+        }
+        if (path === `${base}/runs/latest`) {
+          // 最近一次回归运行(replay/batch),供面板「最近回归」行展示。
+          sendJson(res, 200, { run: latestRun() });
           return;
         }
         if (path === `${base}/recordings`) {

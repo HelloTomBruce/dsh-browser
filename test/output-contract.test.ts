@@ -8,7 +8,7 @@
 // 校验器为零依赖内置实现(约 60 行),只支持本项目 outputSchema 用到的子集:
 // type / properties / required / additionalProperties:false / items / enum。
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerTools } from "../src/browser/register.js";
@@ -139,8 +139,8 @@ describe("静态契约:所有工具声明完整 outputSchema", () => {
     expect(validateSchema(s, {})).not.toEqual([]); // required 缺失
   });
 
-  it("注册了全部 28 个 browser_* 工具", () => {
-    expect(tools.size).toBe(28);
+  it("注册了全部 31 个 browser_* 工具", () => {
+    expect(tools.size).toBe(31);
   });
 
   it("每个工具的 outputSchema 都是带 properties 的对象 schema", () => {
@@ -384,6 +384,65 @@ describe("browser_replay 返回值契约", () => {  it("回放纯逻辑步骤(�
     expectValid("browser_replay", value);
     expect(value.failed).toBe(1);
     expect(value.stoppedAt).toBe(0);
+  });
+});
+
+describe("browser_batch 返回值契约", () => {
+  it("纯逻辑步骤批处理(browser_status 不启动浏览器)", async () => {
+    const value = await run("browser_batch", {
+      steps: [
+        { tool: "browser_status", args: {} },
+        { tool: "browser_network", args: { action: "clear" } },
+      ],
+    });
+    expectValid("browser_batch", value);
+    expect(value.passed).toBe(2);
+    expect(value.failed).toBe(0);
+    expect(typeof value.summary).toBe("string");
+  });
+
+  it("步骤内嵌套 batch/replay/record 报「不允许嵌套」", async () => {
+    for (const nested of ["browser_batch", "browser_replay", "browser_record"]) {
+      const value = await run("browser_batch", {
+        steps: [{ tool: nested, args: {} }],
+        failFast: false,
+      });
+      expectValid("browser_batch", value);
+      expect(value.failed).toBe(1);
+      expect(value.results[0].error).toContain("不允许嵌套");
+    }
+  });
+
+  it("空 steps 抛错", async () => {
+    await expect(run("browser_batch", { steps: [] })).rejects.toThrow(/非空 steps/);
+  });
+});
+
+describe("browser_report 返回值契约", () => {
+  it("list 含此前 replay/batch 的运行记录", async () => {
+    const value = await run("browser_report", { action: "list" });
+    expectValid("browser_report", value);
+    expect(Array.isArray(value.runs)).toBe(true);
+    // 此前 describe 已跑过 replay/batch,运行历史应非空
+    expect(value.runs.length).toBeGreaterThanOrEqual(2);
+    expect(value.runs[0]).toHaveProperty("runId");
+  });
+
+  it("show 返回最近一条完整记录", async () => {
+    const value = await run("browser_report", { action: "show" });
+    expectValid("browser_report", value);
+    expect(value.run.total).toBeGreaterThan(0);
+    expect(Array.isArray(value.run.results)).toBe(true);
+  });
+
+  it("export 生成 Markdown 并落盘工作区", async () => {
+    CONFIG.workspaceDir = tmpHome; // 落盘走临时目录
+    const value = await run("browser_report", { action: "export", file: "reports/contract.md" });
+    expectValid("browser_report", value);
+    expect(value.format).toBe("markdown");
+    expect(value.runs).toBeGreaterThanOrEqual(1);
+    expect(existsSync(value.file)).toBe(true);
+    await run("browser_report", { action: "export", format: "html", file: "reports/contract.html" });
   });
 });
 

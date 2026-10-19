@@ -8,6 +8,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync, renameSync, rmSync
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { savedRecordings } from "./session.js";
+import type { ReplayStep } from "./types.js";
 
 /** 录制存储目录($DSH_HOME/.dsh-browser/recordings)。 */
 export function recordingsDir(): string {
@@ -29,7 +30,8 @@ export function loadRecordings(): number {
       if (!file.endsWith(".json")) continue;
       try {
         const data = JSON.parse(readFileSync(join(dir, file), "utf8")) as {
-          steps?: { tool: string; args: any }[];
+          formatVersion?: number;
+          steps?: ReplayStep[];
           savedAt?: number;
         };
         if (data !== null && typeof data === "object" && Array.isArray(data.steps)) {
@@ -49,13 +51,13 @@ export function loadRecordings(): number {
   return loaded;
 }
 
-/** 写一个录制到磁盘(原子替换);返回文件路径。 */
-export function saveRecordingFile(name: string, steps: { tool: string; args: any }[]): string {
+/** 写一个录制到磁盘(原子替换);返回文件路径。formatVersion 2 起步骤可带 meta(选择器指纹)与 {{var}} 占位符。 */
+export function saveRecordingFile(name: string, steps: ReplayStep[]): string {
   const dir = recordingsDir();
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `${safeName(name)}.json`);
   const tmp = `${file}.tmp`;
-  writeFileSync(tmp, JSON.stringify({ steps, savedAt: Date.now() }, null, 2));
+  writeFileSync(tmp, JSON.stringify({ formatVersion: 2, steps, savedAt: Date.now() }, null, 2));
   renameSync(tmp, file);
   return file;
 }
@@ -82,7 +84,7 @@ export function listRecordings(): Array<{ name: string; steps: number; savedAt: 
 }
 
 /** 录制详情(面板展开查看步骤)。 */
-export function recordingDetail(name: string): { name: string; steps: { tool: string; args: any }[] } | undefined {
+export function recordingDetail(name: string): { name: string; steps: ReplayStep[] } | undefined {
   const r = savedRecordings.get(name);
   if (r === undefined) return undefined;
   return { name, steps: r.steps };

@@ -1,7 +1,7 @@
 {
   "name": "dsh-browser-view",
-  "version": "0.1.2",
-  "description": "DSH 插件:共享 Playwright 浏览器自动化(28 个 browser_* 工具)+ 原生界面实时画面面板 + 官方设置弹窗内的浏览器录制管理。仅依赖 playwright-core,不依赖任何 @deepseek-ai 运行时包。",
+  "version": "0.2.0",
+  "description": "DSH 插件:共享 Playwright 浏览器自动化(31 个 browser_* 工具,含 ARIA ref 交互、批处理、视觉回归、选择器自愈、参数化回放、结构化抽取与回归报告)+ 原生界面实时画面面板 + 官方设置弹窗内的浏览器录制管理。仅依赖 playwright-core,不依赖任何 @deepseek-ai 运行时包。",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",

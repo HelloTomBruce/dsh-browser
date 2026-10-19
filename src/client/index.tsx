@@ -110,6 +110,17 @@ interface NavHistoryItem {
   ts: number
 }
 
+interface LatestRun {
+  runId: string
+  ts: number
+  source: string
+  passed: number
+  total: number
+  failed: number
+  healedCount: number
+  row?: number
+}
+
 /* ------------------------------------------------------------------ */
 /* UI Styles                                                          */
 /* ------------------------------------------------------------------ */
@@ -230,6 +241,7 @@ function BrowserFloatingOverlay() {
   const [ops, setOps] = useState<BrowserOp[]>([])
   const [history, setHistory] = useState<NavHistoryItem[]>([])
   const [shotVersion, setShotVersion] = useState(Date.now())
+  const [lastRun, setLastRun] = useState<LatestRun | null>(null)
 
   // Discover the node-half base path
   useEffect(() => {
@@ -261,6 +273,14 @@ function BrowserFloatingOverlay() {
         .then((d: { calls?: BrowserOp[] } | null) => {
           if (!alive) return
           if (d && Array.isArray(d.calls)) setOps(d.calls.slice(0, 8))
+        })
+        .catch(() => {})
+
+      fetch(`${base}/runs/latest`, { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d: { run?: LatestRun | null } | null) => {
+          if (!alive) return
+          setLastRun(d?.run ?? null)
         })
         .catch(() => {})
     }
@@ -505,6 +525,44 @@ function BrowserFloatingOverlay() {
                   `${op.tool}${op.error ? `: ${op.error}` : ''}`,
                 ),
               ),
+            ),
+          ),
+        // 最近回归运行(replay/batch)
+        lastRun !== null &&
+          createElement(
+            'div',
+            {
+              style: {
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                borderTop: `1px solid ${p.border}`,
+                paddingTop: '6px',
+                marginTop: '2px',
+                fontSize: '12px',
+                color: p.secondary,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              },
+              title: `runId=${lastRun.runId} · browser_report 可导出报告`,
+            },
+            createElement('span', { style: { flex: 'none', color: p.tertiary, fontSize: '11px' } }, '最近回归'),
+            createElement(
+              'span',
+              {
+                style: {
+                  flex: 'none',
+                  fontWeight: 600,
+                  color: lastRun.failed === 0 ? '#10b981' : '#ef4444',
+                },
+              },
+              lastRun.failed === 0 ? '✓' : '✗',
+            ),
+            createElement(
+              'span',
+              { style: { overflow: 'hidden', textOverflow: 'ellipsis' } },
+              `${lastRun.source}${lastRun.row !== undefined ? ` 行${lastRun.row}` : ''} ${lastRun.passed}/${lastRun.total}${lastRun.healedCount > 0 ? ` · 自愈${lastRun.healedCount}` : ''} · ${new Date(lastRun.ts).toLocaleTimeString('zh-CN', { hour12: false })}`,
             ),
           ),
       ),

@@ -2,7 +2,7 @@
 import { readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser, BrowserContext, Page, Request } from "playwright-core";
-import type { BrowserConfig, ProfileState, DownloadEntry, FormField, NavEntry } from "./types.js";
+import type { BrowserConfig, ProfileState, DownloadEntry, FormField, NavEntry, RefEntry, ReplayStep, SelectorHint } from "./types.js";
 
 /** 当前活动 profile 名(默认 "default")。 */
 export let currentProfile = "default";
@@ -17,8 +17,29 @@ export const savedForms = new Map<string, FormField[]>();
 /** 最近一次 browser_form 填充的字段(供 browser_form_save 无参保存)。 */
 export let lastFormFields: FormField[] = [];
 
+// ---------------------------------------------------------------------------
+// ARIA 快照 ref 注册表:page → (ref → 定位信息)。页面导航即失效(防漂移)。
+// ---------------------------------------------------------------------------
+
+const refRegistry = new WeakMap<Page, Map<string, RefEntry>>();
+
+/** 记录一次 aria 快照分配的 ref(整表替换)。 */
+export function setPageRefs(page: Page, refs: Map<string, RefEntry>): void {
+  refRegistry.set(page, refs);
+}
+
+/** 查询某个 ref 的定位信息;未注册返回 undefined。 */
+export function pageRef(page: Page, ref: string): RefEntry | undefined {
+  return refRegistry.get(page)?.get(ref);
+}
+
+/** 清空页面的 ref 表(导航/新快照时调用)。 */
+export function clearPageRefs(page: Page): void {
+  refRegistry.delete(page);
+}
+
 /** 已保存的录制脚本:name → 步骤数组。 */
-export const savedRecordings = new Map<string, { steps: { tool: string; args: any }[]; savedAt: number }>();
+export const savedRecordings = new Map<string, { steps: ReplayStep[]; savedAt: number }>();
 /** 当前录制中的 buffer(非空 = 录制中)。 */
 let recordingSteps: TestCall[] | null = null;
 /** 最近一次 start→stop 的录制结果(save 优先使用;下次 start 时覆盖)。 */
@@ -32,6 +53,8 @@ export interface TestCall {
   ms: number;
   ts: number;
   error?: string;
+  /** 录制时采集的选择器指纹(回放自愈用;register 包装层异步补齐)。 */
+  meta?: { hint?: SelectorHint };
 }
 
 /** 操作轨迹(全局,记录 currentProfile;上限 500 条)。 */
@@ -58,14 +81,15 @@ export function lastRecordingOf(): TestCall[] | null {
   return lastRecording;
 }
 
-/** 操作轨迹追加(同时写入录制 buffer,排除 record/replay 自身)。 */
-export function recordCall(call: TestCall): void {
+/** 操作轨迹追加(同时写入录制 buffer,排除 record/replay 自身)。返回存入的调用对象(供调用方补 meta)。 */
+export function recordCall(call: TestCall): TestCall {
   testLog.push(call);
   if (testLog.length > 500) testLog.shift();
   if (recordingSteps !== null && call.tool !== "browser_record" && call.tool !== "browser_replay") {
     recordingSteps.push(call);
     if (recordingSteps.length > 500) recordingSteps.shift();
   }
+  return call;
 }
 
 /** 操作轨迹(按时间倒序,最新在前)。 */
@@ -183,6 +207,8 @@ export function attachPage(page: Page, config: BrowserConfig): void {
   const profile = currentProfile;
   page.on("framenavigated", (frame) => {
     if (frame !== page.mainFrame()) return;
+    // 导航后旧 ref 全部失效(元素可能已不存在),防 ref 漂移误点。
+    clearPageRefs(page);
     const url = frame.url();
     if (!url || url === "about:blank") return;
     recordNav(profile, url);

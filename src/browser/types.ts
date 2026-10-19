@@ -23,6 +23,16 @@ export interface BrowserConfig {
   maxTextChars?: number;
   maxLinks?: number;
   timeoutMs?: number;
+  /** 视觉回归基线截图目录(默认 .dsh-browser/baselines,不受截图清理策略约束)。 */
+  baselineDir?: string;
+  /** 回放/批处理时的选择器自愈(默认 true;只作用于失败路径,live 工具不受影响)。 */
+  selectorHealing?: boolean;
+  /** 自愈时单次尝试的超时毫秒(默认 3000,避免等满全局超时)。 */
+  healTimeoutMs?: number;
+  /** ARIA 快照每次分配的最大 ref 数(默认 200)。 */
+  maxRefs?: number;
+  /** browser_extract 单次最多聚合的行数(默认 1000)。 */
+  maxRows?: number;
 }
 
 /** 一个命名 profile 的会话状态。 */
@@ -59,4 +69,29 @@ export interface FormField {
   selector?: string;
   label?: string;
   value?: string;
+}
+
+/** ARIA 快照分配的 ref 注册项(ref → 定位信息)。 */
+export interface RefEntry {
+  role: string;
+  name: string;
+  /** 生成快照时计算的稳定 CSS 路径(优先 #id / [data-testid] / nth-of-type 链)。 */
+  selector: string;
+}
+
+/** 录制时采集的选择器指纹(回放自愈的降级候选来源)。 */
+export interface SelectorHint {
+  testid?: string;
+  role?: string;
+  name?: string;
+  id?: string;
+  text?: string;
+  tag?: string;
+}
+
+/** 录制/回放的一步(formatVersion 2 起支持 meta.hint 选择器指纹)。 */
+export interface ReplayStep {
+  tool: string;
+  args: any;
+  meta?: { hint?: SelectorHint };
 }

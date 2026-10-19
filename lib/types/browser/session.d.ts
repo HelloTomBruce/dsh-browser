@@ -1,5 +1,5 @@
 import type { Page } from "playwright-core";
-import type { BrowserConfig, ProfileState, DownloadEntry, FormField, NavEntry } from "./types.js";
+import type { BrowserConfig, ProfileState, DownloadEntry, FormField, NavEntry, RefEntry, ReplayStep, SelectorHint } from "./types.js";
 /** 当前活动 profile 名(默认 "default")。 */
 export declare let currentProfile: string;
 /** 多配置文件浏览器会话:name → 会话状态。 */
@@ -8,12 +8,15 @@ export declare const profileStates: Map<string, ProfileState>;
 export declare const savedForms: Map<string, FormField[]>;
 /** 最近一次 browser_form 填充的字段(供 browser_form_save 无参保存)。 */
 export declare let lastFormFields: FormField[];
+/** 记录一次 aria 快照分配的 ref(整表替换)。 */
+export declare function setPageRefs(page: Page, refs: Map<string, RefEntry>): void;
+/** 查询某个 ref 的定位信息;未注册返回 undefined。 */
+export declare function pageRef(page: Page, ref: string): RefEntry | undefined;
+/** 清空页面的 ref 表(导航/新快照时调用)。 */
+export declare function clearPageRefs(page: Page): void;
 /** 已保存的录制脚本:name → 步骤数组。 */
 export declare const savedRecordings: Map<string, {
-    steps: {
-        tool: string;
-        args: any;
-    }[];
+    steps: ReplayStep[];
     savedAt: number;
 }>;
 /** 一次工具调用的记录(操作轨迹 / 录制 / 回放共用)。 */
@@ -24,14 +27,18 @@ export interface TestCall {
     ms: number;
     ts: number;
     error?: string;
+    /** 录制时采集的选择器指纹(回放自愈用;register 包装层异步补齐)。 */
+    meta?: {
+        hint?: SelectorHint;
+    };
 }
 export declare function isRecording(): boolean;
 export declare function startRecording(): void;
 export declare function stopRecording(): TestCall[];
 /** 最近一次完整录制(start→stop)的 buffer;从未录制过返回 null。 */
 export declare function lastRecordingOf(): TestCall[] | null;
-/** 操作轨迹追加(同时写入录制 buffer,排除 record/replay 自身)。 */
-export declare function recordCall(call: TestCall): void;
+/** 操作轨迹追加(同时写入录制 buffer,排除 record/replay 自身)。返回存入的调用对象(供调用方补 meta)。 */
+export declare function recordCall(call: TestCall): TestCall;
 /** 操作轨迹(按时间倒序,最新在前)。 */
 export declare function testLogOf(): TestCall[];
 export declare function clearTestLog(): void;
