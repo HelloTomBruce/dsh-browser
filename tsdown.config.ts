@@ -16,7 +16,7 @@ const CLIENT_EXTERNALS = [
 ];
 
 const node: UserConfig = {
-  name: "dsh-browser",
+  name: "dsh-browser-view",
   entry: { index: "lib/types/index.js" },
   outDir: "lib",
   format: ["esm"],
@@ -31,7 +31,7 @@ const node: UserConfig = {
 };
 
 const client: UserConfig = {
-  name: "dsh-browser/client",
+  name: "dsh-browser-view/client",
   entry: { client: "lib/types/client/index.js" },
   outDir: "lib",
   format: "cjs",
@@ -44,7 +44,7 @@ const client: UserConfig = {
   noExternal: (id) => (CLIENT_EXTERNALS.includes(id) ? undefined : true),
   outputOptions: {
     entryFileNames: "client.js",
-    banner: `window.__ModuleLoader__.load({ id: "dsh-browser", factory: (require) => {`,
+    banner: `window.__ModuleLoader__.load({ id: "dsh-browser-view", factory: (require) => {`,
     footer: "return module.exports; } });",
     intro: "var module = { exports: {} }; var exports = module.exports;",
   },

@@ -1,21 +1,26 @@
 /**
- * dsh-browser browser half: a "浏览器" page in the official dsh settings
- * dialog (settings.section seat) that manages saved browser recordings —
- * list, expand steps, delete. Data flows to the node half through the
- * plugin's own same-origin HTTP endpoints (base path discovered from
- * /__dsh-browser__/config).
+ * dsh-browser-view client half:
+ * 1. "settings.section" -> A "🌐 浏览器" page in the official dsh settings
+ *    dialog managing saved browser recordings with polished header & icon.
+ * 2. "shell.overlay" -> Universal floating widget (FAB + live screenshot
+ *    thumbnail panel + full-size inspection modal) rendered natively in both
+ *    Electron desktop and web client.
  */
 
-import { createElement, useEffect, useState } from 'react'
+import { createElement, useEffect, useState, type MouseEvent } from 'react'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { SettingsSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface SlotMap {
+    'shell.overlay': { kind: 'list'; scope: 'root' }
+  }
+}
+
 /* ------------------------------------------------------------------ */
-/* Theme-aware palette (hard-coded, high contrast; the --dsw-alias-*   */
-/* tokens resolve too faint in some surfaces). Dark detection mirrors  */
-/* the host: body[data-ds-dark-theme] presence.                        */
+/* Theme-aware palette                                                */
 /* ------------------------------------------------------------------ */
 
 interface Palette {
@@ -60,6 +65,13 @@ function useDarkTheme(): boolean {
   return dark
 }
 
+function fmtTime(ts: number): string {
+  const d = new Date(ts)
+  const hh = ('0' + d.getHours()).slice(-2)
+  const mm = ('0' + d.getMinutes()).slice(-2)
+  return `${hh}:${mm}`
+}
+
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
 /* ------------------------------------------------------------------ */
@@ -76,8 +88,30 @@ interface RecordingDetail {
   steps: Array<{ tool: string; args: unknown }>
 }
 
+interface BrowserStatus {
+  open: boolean
+  tabs?: number
+  url?: string
+  title?: string
+  channel?: string
+}
+
+interface BrowserOp {
+  tool: string
+  ok: boolean
+  ms: number
+  ts: number
+  error?: string
+}
+
+interface NavHistoryItem {
+  url: string
+  title?: string
+  ts: number
+}
+
 /* ------------------------------------------------------------------ */
-/* UI — all colors come from the palette above (theme-aware).          */
+/* UI Styles                                                          */
 /* ------------------------------------------------------------------ */
 
 function styleFor(p: Palette) {
@@ -139,8 +173,6 @@ function styleFor(p: Palette) {
       gap: '2px',
       borderTop: `1px solid ${p.border}`,
       paddingTop: '6px',
-      // 不设 max-height/overflow:官方 .options 内容列已是滚动容器,
-      // 内容自然撑开由它统一滚动(此前 30vh 双重滚动导致长录制看不清)。
     } as React.CSSProperties,
     stepLine: {
       display: 'flex',
@@ -185,31 +217,477 @@ function styleFor(p: Palette) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Section component                                                   */
+/* 1. Universal Floating Overlay Component (shell.overlay slot)       */
 /* ------------------------------------------------------------------ */
 
-function BrowserSettingsSection(_props: SettingsSectionOwnerProps) {
+function BrowserFloatingOverlay() {
   const dark = useDarkTheme()
-  const S = styleFor(dark ? DARK : LIGHT)
+  const p = dark ? DARK : LIGHT
   const [base, setBase] = useState<string>('/browser')
-  const [list, setList] = useState<RecordingRow[] | null>(null)
-  const [error, setError] = useState<string>('')
-  // undefined=收起, 'loading'=加载中, 'failed'=加载失败, 对象=已展开。
-  const [expanded, setExpanded] = useState<Record<string, RecordingDetail | 'loading' | 'failed' | undefined>>({})
+  const [isOpen, setIsOpen] = useState(false)
+  const [modalOpen, setModalOpen] = useState(false)
+  const [status, setStatus] = useState<BrowserStatus | null>(null)
+  const [ops, setOps] = useState<BrowserOp[]>([])
+  const [history, setHistory] = useState<NavHistoryItem[]>([])
+  const [shotVersion, setShotVersion] = useState(Date.now())
 
-  // Discover the node-half base path (configurable via cordis.patch.yml).
+  // Discover the node-half base path
   useEffect(() => {
     let alive = true
-    fetch('/__dsh-browser__/config', { cache: 'no-store' })
+    fetch('/__dsh-browser-view__/config', { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((d: { basePath?: unknown }) => {
         if (alive && typeof d.basePath === 'string' && d.basePath) setBase(d.basePath.replace(/\/+$/, ''))
       })
-      .catch(() => { /* 默认 /browser */ })
+      .catch(() => {})
     return () => { alive = false }
   }, [])
 
-  // Load the recording list whenever the base path settles.
+  // Poll status & operations history
+  useEffect(() => {
+    let alive = true
+    const poll = () => {
+      fetch(`${base}/status`, { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((s: BrowserStatus | null) => {
+          if (!alive) return
+          setStatus(s)
+          if (s?.open) setShotVersion(Date.now())
+        })
+        .catch(() => { if (alive) setStatus(null) })
+
+      fetch(`${base}/log`, { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d: { calls?: BrowserOp[] } | null) => {
+          if (!alive) return
+          if (d && Array.isArray(d.calls)) setOps(d.calls.slice(0, 8))
+        })
+        .catch(() => {})
+    }
+
+    poll()
+    const timer = setInterval(poll, 3000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [base])
+
+  // Poll navigation history when modal is open
+  useEffect(() => {
+    if (!modalOpen) return
+    let alive = true
+    const pollHistory = () => {
+      fetch(`${base}/history`, { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d: { history?: NavHistoryItem[] } | null) => {
+          if (alive && d && Array.isArray(d.history)) setHistory(d.history)
+        })
+        .catch(() => {})
+      setShotVersion(Date.now())
+    }
+    pollHistory()
+    const timer = setInterval(pollHistory, 2000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [modalOpen, base])
+
+  // Listen to Escape for modal close
+  useEffect(() => {
+    if (!modalOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setModalOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [modalOpen])
+
+  const shotSrc = `${base}/screenshot?v=${shotVersion}`
+
+  return createElement(
+    'div',
+    {
+      id: 'dsh-browser-client-overlay',
+      style: {
+        position: 'fixed',
+        inset: 0,
+        pointerEvents: 'none',
+        zIndex: 2147483000,
+      },
+    },
+    // FAB Floating Button
+    createElement(
+      'button',
+      {
+        type: 'button',
+        title: '浏览器自动化与实时画面',
+        onClick: () => setIsOpen((v) => !v),
+        style: {
+          position: 'fixed',
+          right: '16px',
+          bottom: '16px',
+          width: '42px',
+          height: '42px',
+          borderRadius: '999px',
+          border: `1px solid ${p.border}`,
+          background: dark ? '#1e2430' : '#ffffff',
+          color: p.primary,
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '18px',
+          boxShadow: '0 4px 16px rgba(0, 0, 0, 0.25)',
+          pointerEvents: 'auto',
+          userSelect: 'none',
+        },
+      },
+      '🌐',
+    ),
+    // Floating Panel
+    isOpen &&
+      createElement(
+        'div',
+        {
+          style: {
+            position: 'fixed',
+            right: '16px',
+            bottom: '66px',
+            width: '320px',
+            maxHeight: '72vh',
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+            border: `1px solid ${p.border}`,
+            borderRadius: '12px',
+            background: dark ? '#181e29' : '#ffffff',
+            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+            padding: '12px',
+            pointerEvents: 'auto',
+          },
+        },
+        // Status Row
+        createElement(
+          'div',
+          { style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0' } },
+          createElement('span', {
+            style: {
+              width: '8px',
+              height: '8px',
+              borderRadius: '999px',
+              flex: 'none',
+              background: status?.open ? '#10b981' : '#ef4444',
+            },
+          }),
+          createElement(
+            'span',
+            {
+              style: {
+                flex: 1,
+                minWidth: 0,
+                color: p.primary,
+                fontSize: '13px',
+                fontWeight: 600,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              },
+            },
+            '浏览器实时画面',
+          ),
+          createElement(
+            'span',
+            {
+              style: {
+                color: p.secondary,
+                fontSize: '12px',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                maxWidth: '160px',
+              },
+            },
+            status === null
+              ? '未启用'
+              : status.open
+                ? `${status.tabs ?? 1} 标签 · ${(status.url || '').slice(0, 20)}`
+                : '未打开',
+          ),
+        ),
+        // Live Screenshot Thumbnail
+        status?.open
+          ? createElement('img', {
+              src: shotSrc,
+              alt: '实时画面',
+              title: '点击放大查看实时大屏与访问历史',
+              onClick: () => setModalOpen(true),
+              style: {
+                width: '100%',
+                maxHeight: '160px',
+                objectFit: 'cover',
+                borderRadius: '8px',
+                border: `1px solid ${p.border}`,
+                cursor: 'pointer',
+                background: dark ? '#10141c' : '#f8fafc',
+              },
+            })
+          : createElement(
+              'div',
+              {
+                style: {
+                  color: p.tertiary,
+                  fontSize: '11px',
+                  lineHeight: '1.5',
+                  padding: '8px',
+                  background: dark ? '#121620' : '#f8fafc',
+                  borderRadius: '6px',
+                },
+              },
+              '浏览器尚未启动。在对话中让 Agent 调用 browser_open 即可呈现画面。',
+            ),
+        // Recent Operations
+        ops.length > 0 &&
+          createElement(
+            'div',
+            {
+              style: {
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '3px',
+                borderTop: `1px solid ${p.border}`,
+                paddingTop: '6px',
+                marginTop: '2px',
+              },
+            },
+            createElement(
+              'div',
+              { style: { color: p.tertiary, fontSize: '11px', fontWeight: 500, marginBottom: '2px' } },
+              `最近操作 (${ops.length} 条)`,
+            ),
+            ops.map((op, i) =>
+              createElement(
+                'div',
+                {
+                  key: i,
+                  style: {
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontSize: '12px',
+                    color: p.secondary,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  },
+                },
+                createElement(
+                  'span',
+                  {
+                    style: {
+                      flex: 'none',
+                      color: op.ok ? '#10b981' : '#ef4444',
+                      fontWeight: 600,
+                    },
+                  },
+                  op.ok ? '✓' : '✗',
+                ),
+                createElement('span', { style: { color: p.tertiary, fontSize: '11px', flex: 'none' } }, fmtTime(op.ts)),
+                createElement(
+                  'span',
+                  {
+                    style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' },
+                    title: `${op.tool}${op.error ? `: ${op.error}` : ''}`,
+                  },
+                  `${op.tool}${op.error ? `: ${op.error}` : ''}`,
+                ),
+              ),
+            ),
+          ),
+      ),
+    // Full-screen Modal Box
+    modalOpen &&
+      createElement(
+        'div',
+        {
+          onClick: (e: MouseEvent) => {
+            if (e.target === e.currentTarget) setModalOpen(false)
+          },
+          style: {
+            position: 'fixed',
+            inset: 0,
+            zIndex: 2147483001,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '24px',
+            background: 'rgba(0, 0, 0, 0.65)',
+            pointerEvents: 'auto',
+          },
+        },
+        createElement(
+          'div',
+          {
+            style: {
+              width: 'min(1100px, 94vw)',
+              maxHeight: '90vh',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '10px',
+              border: `1px solid ${p.border}`,
+              borderRadius: '12px',
+              background: dark ? '#181e29' : '#ffffff',
+              padding: '16px',
+              boxShadow: '0 16px 64px rgba(0, 0, 0, 0.4)',
+            },
+          },
+          // Header
+          createElement(
+            'div',
+            { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+            createElement(
+              'span',
+              {
+                style: {
+                  flex: 1,
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  color: p.primary,
+                  fontSize: '14px',
+                  fontWeight: 600,
+                },
+              },
+              status?.open ? `${status.title || ''} (${status.url || ''})` : '浏览器实时大屏',
+            ),
+            createElement(
+              'button',
+              {
+                type: 'button',
+                onClick: () => setModalOpen(false),
+                style: {
+                  width: '28px',
+                  height: '28px',
+                  border: `1px solid ${p.border}`,
+                  borderRadius: '6px',
+                  background: 'transparent',
+                  color: p.secondary,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '14px',
+                },
+              },
+              '✕',
+            ),
+          ),
+          // Large Screenshot
+          status?.open
+            ? createElement('img', {
+                src: shotSrc,
+                alt: '浏览器大图',
+                style: {
+                  width: '100%',
+                  maxHeight: '55vh',
+                  objectFit: 'contain',
+                  borderRadius: '8px',
+                  border: `1px solid ${p.border}`,
+                  background: dark ? '#10141c' : '#f8fafc',
+                },
+              })
+            : createElement(
+                'div',
+                {
+                  style: {
+                    color: p.tertiary,
+                    fontSize: '13px',
+                    textAlign: 'center',
+                    padding: '32px 0',
+                  },
+                },
+                '浏览器尚未打开',
+              ),
+          // History Section
+          history.length > 0 &&
+            createElement(
+              'div',
+              {
+                style: {
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '4px',
+                  maxHeight: '22vh',
+                  overflowY: 'auto',
+                  borderTop: `1px solid ${p.border}`,
+                  paddingTop: '8px',
+                },
+              },
+              createElement(
+                'div',
+                { style: { color: p.tertiary, fontSize: '12px', fontWeight: 500 } },
+                `访问历史 (${history.length} 条，点击在新标签打开)`,
+              ),
+              history.map((h, i) =>
+                createElement(
+                  'a',
+                  {
+                    key: i,
+                    href: h.url,
+                    target: '_blank',
+                    rel: 'noopener noreferrer',
+                    style: {
+                      display: 'flex',
+                      gap: '8px',
+                      alignItems: 'center',
+                      color: p.secondary,
+                      fontSize: '12px',
+                      textDecoration: 'none',
+                      borderRadius: '6px',
+                      padding: '4px 6px',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    },
+                  },
+                  createElement('span', { style: { color: p.tertiary, flex: 'none' } }, fmtTime(h.ts)),
+                  createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis' } }, h.title || h.url),
+                ),
+              ),
+            ),
+        ),
+      ),
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* 2. Settings Section Component (settings.section seat)              */
+/* ------------------------------------------------------------------ */
+
+function BrowserSettingsSection(_props: SettingsSectionOwnerProps) {
+  const dark = useDarkTheme()
+  const p = dark ? DARK : LIGHT
+  const S = styleFor(p)
+  const [base, setBase] = useState<string>('/browser')
+  const [list, setList] = useState<RecordingRow[] | null>(null)
+  const [error, setError] = useState<string>('')
+  const [expanded, setExpanded] = useState<Record<string, RecordingDetail | 'loading' | 'failed' | undefined>>({})
+
+  useEffect(() => {
+    let alive = true
+    fetch('/__dsh-browser-view__/config', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((d: { basePath?: unknown }) => {
+        if (alive && typeof d.basePath === 'string' && d.basePath) setBase(d.basePath.replace(/\/+$/, ''))
+      })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [])
+
   useEffect(() => {
     let alive = true
     setList(null)
@@ -229,16 +707,14 @@ function BrowserSettingsSection(_props: SettingsSectionOwnerProps) {
     setExpanded((prev) => {
       const current = prev[name]
       if (current !== undefined && current !== 'loading') {
-        // 展开中(对象或失败态)→ 收起
         const next = { ...prev }
         delete next[name]
         return next
       }
-      // 收起或加载中 → 发起加载,标记 loading
       fetch(`${base}/recordings/detail?name=${encodeURIComponent(name)}`, { cache: 'no-store' })
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-        .then((d: RecordingDetail) => setExpanded((p) => ({ ...p, [name]: d })))
-        .catch(() => setExpanded((p) => ({ ...p, [name]: 'failed' })))
+        .then((d: RecordingDetail) => setExpanded((pr) => ({ ...pr, [name]: d })))
+        .catch(() => setExpanded((pr) => ({ ...pr, [name]: 'failed' })))
       return { ...prev, [name]: 'loading' }
     })
   }
@@ -261,26 +737,59 @@ function BrowserSettingsSection(_props: SettingsSectionOwnerProps) {
       .catch(() => {})
   }
 
-  const root: React.CSSProperties = {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px',
-    maxWidth: '720px',
-  }
-
-  const heading: React.CSSProperties = {
-    color: 'var(--dsw-alias-label-tertiary)',
-    fontSize: '12px',
-    lineHeight: '1.6',
-  }
-
   return createElement(
     'div',
     { style: S.root },
+    // Modern Settings Header with Browser Icon
+    createElement(
+      'div',
+      {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          paddingBottom: '12px',
+          marginBottom: '6px',
+          borderBottom: `1px solid ${p.border}`,
+        },
+      },
+      createElement(
+        'div',
+        {
+          style: {
+            width: '38px',
+            height: '38px',
+            borderRadius: '10px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: dark ? '#222938' : '#eef2f6',
+            border: `1px solid ${p.border}`,
+            fontSize: '20px',
+            flexShrink: 0,
+          },
+        },
+        '🌐',
+      ),
+      createElement(
+        'div',
+        { style: { display: 'flex', flexDirection: 'column', gap: '2px' } },
+        createElement(
+          'div',
+          { style: { fontSize: '15px', fontWeight: 600, color: p.primary } },
+          '浏览器自动化与录制',
+        ),
+        createElement(
+          'div',
+          { style: { fontSize: '12px', color: p.tertiary } },
+          '共享 Playwright 浏览器自动化、测试原语、操作轨迹与回归录制管理',
+        ),
+      ),
+    ),
     createElement(
       'div',
       { style: S.heading },
-      '浏览器录制(agent 用 browser_record save <name> 创建,存储于 $DSH_HOME/.dsh-browser/recordings)',
+      '已保存的操作录制 (agent 在对话中用 browser_record save <name> 创建，存储于 $DSH_HOME/.dsh-browser/recordings)',
     ),
     error
       ? createElement('div', { style: S.empty }, `加载失败: ${error}`)
@@ -352,14 +861,23 @@ function BrowserSettingsSection(_props: SettingsSectionOwnerProps) {
 export const inject = ['slots']
 
 /**
- * Register the "浏览器" settings page: nav entry + recordings management.
- * @param ctx - the browser plugin context.
+ * Register the browser extension components:
+ * 1. settings.section -> "🌐 浏览器" page in settings
+ * 2. shell.overlay -> Universal floating live screenshot widget (Desktop & Web)
  */
 export function apply(ctx: ClientContext): void {
+  // 1. Settings page with browser icon
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'browser',
     order: 40,
-    label: '浏览器',
+    label: '🌐 浏览器',
   }, BrowserSettingsSection))
+
+  // 2. Universal floating widget (Desktop & Web)
+  ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+    name: 'shell.overlay',
+    id: 'dsh-browser-overlay',
+    order: 100,
+  }, BrowserFloatingOverlay))
 }

@@ -70,7 +70,7 @@ export function resolveConfig(
   }
   const errors = validateConfig(schema, config);
   if (errors.length > 0) {
-    throw new Error(`dsh-browser: 配置无效 — ${errors.join("; ")}`);
+    throw new Error(`${moduleName}: 配置无效 — ${errors.join("; ")}`);
   }
   return config;
 }

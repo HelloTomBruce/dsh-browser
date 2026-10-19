@@ -18,7 +18,7 @@
 #   timeoutMs         浏览器操作超时(毫秒)
 - insert:
     - id: browser
-      name: 'dsh-browser'
+      name: 'dsh-browser-view'
       config:
         channel: auto
         headless: false

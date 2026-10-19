@@ -25,7 +25,7 @@ describe("resolveConfig", () => {
   it("非法枚举值报错并带模块名", () => {
     expect(() =>
       resolveConfig("browser", SCHEMA, { channel: "auto", headless: true }, { channel: "firefox" }),
-    ).toThrow(/dsh-browser/);
+    ).toThrow(/browser/);
   });
 
   it("超出数字范围报错", () => {
