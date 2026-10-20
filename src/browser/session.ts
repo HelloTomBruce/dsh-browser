@@ -723,13 +723,14 @@ export async function closeBrowser(): Promise<void> {
   downloadsByProfile.clear();
 }
 
-/** Best-effort current page identity, safe when nothing is open. */
+/** Best-effort current page identity, safe when nothing is open.title 有界防页面忙时挂起。 */
 export async function pageIdentity(page: Page) {
   try {
-    return {
-      url: page.url(),
-      title: await page.title(),
-    };
+    const title = await new Promise<string>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error("title timeout")), 2_000);
+      page.title().then(resolve, reject).finally(() => clearTimeout(t));
+    }).catch(() => "");
+    return { url: page.url(), title };
   } catch {
     return { url: "", title: "" };
   }

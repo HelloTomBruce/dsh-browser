@@ -631,9 +631,10 @@ export async function targetLocator(page: Page, args: Record<string, any>): Prom
       );
     }
     const byPath = page.locator(entry.selector).first();
-    if ((await byPath.count().catch(() => 0)) > 0) {
-      const ok = await byPath
-        .evaluate((el, want) => {
+    if ((await withTimeout(byPath.count(), 3_000, "解析 ref 路径").catch(() => 0)) > 0) {
+      const ok = await withTimeout(
+        byPath
+          .evaluate((el, want) => {
           const tag = el.tagName.toLowerCase();
           const type = (el.getAttribute("type") ?? "").toLowerCase();
           const roleAttr = (el.getAttribute("role") ?? "").trim().split(/\s+/)[0] ?? "";
@@ -653,8 +654,10 @@ export async function targetLocator(page: Page, args: Record<string, any>): Prom
           const nameOk =
             want.name === "" || aria.includes(want.name) || ph.includes(want.name) || text.includes(want.name);
           return roleOk && nameOk;
-        }, { role: entry.role, name: entry.name })
-        .catch(() => false);
+        }, { role: entry.role, name: entry.name }),
+        3_000,
+        "校验 ref 元素",
+      ).catch(() => false);
       if (ok) return byPath;
     }
     // 降级:role + name
@@ -662,7 +665,7 @@ export async function targetLocator(page: Page, args: Record<string, any>): Prom
       entry.name !== ""
         ? page.getByRole(entry.role as any, { name: entry.name }).first()
         : page.getByRole(entry.role as any).first();
-    if ((await byRole.count().catch(() => 0)) > 0) return byRole;
+    if ((await withTimeout(byRole.count(), 3_000, "解析 ref role 降级").catch(() => 0)) > 0) return byRole;
     throw new Error(
       `ref ${ref} 已失效(元素不存在或内容已变化);请重新 browser_snapshot { mode: "aria" }`,
     );
@@ -741,6 +744,19 @@ const DROPDOWN_OPTION_SELECTOR = [
   "[role='listbox'] [role='option']",
 ].join(", ");
 
+/** 给本身无超时的 Playwright 调用(evaluate/allTextContents)加有界保护,防页面主线程忙时无限挂起。 */
+export async function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const guard = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} 超时(${ms}ms;页面主线程可能正忙)`)), ms);
+  });
+  try {
+    return await Promise.race([p, guard]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 /**
  * 下拉选择原语:原生 <select> 走 selectOption;组件库下拉(antd/element/listbox)
  * 走「点击触发框 → 等待可见选项 → 按文本点击」。找不到选项时抛出错误并附当前可见
@@ -754,17 +770,17 @@ export async function selectTool(config: BrowserConfig, args: Record<string, any
   if (!want) throw new Error("select 需要 option(选项文本)");
   const exact = args.exact === true;
   const timeout = args.timeoutMs ?? config.timeoutMs;
+  // 无超时调用的有界保护上限:总耗时远低于工具级超时,避免 TOOL_TIMEOUT 先炸。
+  const probe = Math.min(timeout, 5_000);
 
   // 1) 原生 <select>
-  const tag = await target
-    .evaluate((el) => el.tagName.toLowerCase())
-    .catch(() => "");
+  const tag = await withTimeout(target.evaluate((el) => el.tagName.toLowerCase()), probe, "读取目标元素").catch(() => "");
   if (tag === "select") {
     try {
       await target.selectOption({ label: want }, { timeout });
       return { selected: want, selector: label, ...(await pageIdentity(page)) };
     } catch {
-      const options = await target.locator("option").allTextContents();
+      const options = await withTimeout(target.locator("option").allTextContents(), probe, "读取原生下拉选项").catch(() => [] as string[]);
       throw new Error(`原生下拉无选项 "${want}";可用选项: ${options.map((t) => t.trim()).join(" / ")}`);
     }
   }
@@ -788,7 +804,7 @@ export async function selectTool(config: BrowserConfig, args: Record<string, any
   }
   const options = page.locator(DROPDOWN_OPTION_SELECTOR);
   await options.first().waitFor({ state: "visible", timeout: Math.min(timeout, 5_000) }).catch(() => {});
-  const texts = (await options.allTextContents()).map((t) => t.trim()).filter(Boolean);
+  const texts = (await withTimeout(options.allTextContents(), probe, "读取下拉选项")).map((t) => t.trim()).filter(Boolean);
   if (texts.length === 0) {
     throw new Error(`点击 ${label} 后未出现下拉选项(非原生 select,也不是已知的组件库下拉)`);
   }
@@ -797,7 +813,7 @@ export async function selectTool(config: BrowserConfig, args: Record<string, any
     await page.keyboard.press("Escape").catch(() => {}); // 收起下拉,保持现场干净
     throw new Error(`下拉选项中无 "${want}";可见选项: ${texts.join(" / ")}`);
   }
-  await options.nth(index).click();
+  await options.nth(index).click({ timeout: probe });
   return { selected: texts[index], selector: label, ...(await pageIdentity(page)) };
 }
 

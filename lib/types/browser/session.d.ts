@@ -149,7 +149,7 @@ export declare function tabList(): Promise<{
     title: string;
 }[]>;
 export declare function closeBrowser(): Promise<void>;
-/** Best-effort current page identity, safe when nothing is open. */
+/** Best-effort current page identity, safe when nothing is open.title 有界防页面忙时挂起。 */
 export declare function pageIdentity(page: Page): Promise<{
     url: string;
     title: string;

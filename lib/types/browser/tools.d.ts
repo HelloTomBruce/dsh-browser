@@ -144,6 +144,8 @@ export declare function pressTool(config: BrowserConfig, args: Record<string, an
     title: string;
     pressed: string;
 }>;
+/** 给本身无超时的 Playwright 调用(evaluate/allTextContents)加有界保护,防页面主线程忙时无限挂起。 */
+export declare function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T>;
 /**
  * 下拉选择原语:原生 <select> 走 selectOption;组件库下拉(antd/element/listbox)
  * 走「点击触发框 → 等待可见选项 → 按文本点击」。找不到选项时抛出错误并附当前可见
