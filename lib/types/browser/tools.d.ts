@@ -155,7 +155,18 @@ export declare function selectTool(config: BrowserConfig, args: Record<string, a
     selected: string;
     selector: string;
 }>;
+/**
+ * 防御性解码 eval 脚本:模型/人工偶发把脚本 JSON.stringify 一次再传
+ * (脚本以 \" 开头、换行变字面 \\n),回放/录制链路不纠错会导致语法错误。
+ * 识别条件:字符串以引号包裹且含反斜杠转义,且 JSON.parse 结果仍是字符串。
+ * 无法解析或语义不变场景原样返回(裸字符串字面量如 "hello" 不含转义,不受影响)。
+ */
+export declare function unwrapDoubleEncodedScript(script: string): {
+    script: string;
+    unwrapped: boolean;
+};
 export declare function evalTool(config: BrowserConfig, args: Record<string, any>): Promise<{
+    scriptUnwrapped?: boolean | undefined;
     result: unknown;
 }>;
 export declare function screenshotTool(config: BrowserConfig, args: Record<string, any>, exec?: ToolRunContext): Promise<{

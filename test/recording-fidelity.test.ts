@@ -6,7 +6,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { recordTool, replayTool, runReplay } from "../src/browser/tools.js";
+import { recordTool, replayTool, runReplay, unwrapDoubleEncodedScript } from "../src/browser/tools.js";
 import { savedRecordings, startRecording, stopRecording, recordCall, clearTestLog } from "../src/browser/session.js";
 
 let dir: string;
@@ -23,6 +23,22 @@ afterAll(() => {
   if (origHome === undefined) delete process.env.DSH_HOME;
   else process.env.DSH_HOME = origHome;
   rmSync(dir, { recursive: true, force: true });
+});
+
+describe("unwrapDoubleEncodedScript", () => {
+  it("解码双重序列化脚本", () => {
+    const script = 'const a = 1;\nreturn a;';
+    const r = unwrapDoubleEncodedScript(JSON.stringify(script));
+    expect(r).toEqual({ script, unwrapped: true });
+  });
+
+  it("普通脚本原样返回(含裸字符串字面量)", () => {
+    expect(unwrapDoubleEncodedScript("document.title")).toEqual({ script: "document.title", unwrapped: false });
+    // 不含转义的裸字符串字面量是合法 JS,不误伤
+    expect(unwrapDoubleEncodedScript('"hello"')).toEqual({ script: '"hello"', unwrapped: false });
+    // 带引号但不是合法 JSON 字符串字面量
+    expect(unwrapDoubleEncodedScript('"unbalanced\\')).toEqual({ script: '"unbalanced\\', unwrapped: false });
+  });
 });
 
 describe("录制保真(大字段不截断)", () => {
@@ -66,6 +82,16 @@ describe("录制保真(大字段不截断)", () => {
     expect(r).toMatchObject({ total: 2, passed: 2, failed: 0 });
     expect(seen[0].args.script).toBe(recording.steps[0].args.script);
     expect(seen[1].args.steps).toHaveLength(12);
+  });
+
+  it("save 时双重序列化的 eval 脚本被解码为干净脚本", async () => {
+    const script = 'const el = document.querySelector("#a");\nreturn el ? el.innerText : null;';
+    const doubleEncoded = JSON.stringify(script); // 模型偶发多 stringify 一次:以 \" 开头、换行变 \n
+    startRecording();
+    recordCall({ tool: "browser_eval", args: { script: doubleEncoded }, ok: true, ms: 1, ts: 1 });
+    stopRecording();
+    await recordTool({ action: "save", name: "unwrap" });
+    expect(savedRecordings.get("unwrap")!.steps[0].args.script).toBe(script);
   });
 
   it("save 默认剔除失败的实验步骤,includeFailed=true 保留", async () => {

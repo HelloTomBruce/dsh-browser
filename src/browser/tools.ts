@@ -767,9 +767,27 @@ export async function selectTool(config: BrowserConfig, args: Record<string, any
   return { selected: texts[index], selector: label, ...(await pageIdentity(page)) };
 }
 
+/**
+ * 防御性解码 eval 脚本:模型/人工偶发把脚本 JSON.stringify 一次再传
+ * (脚本以 \" 开头、换行变字面 \\n),回放/录制链路不纠错会导致语法错误。
+ * 识别条件:字符串以引号包裹且含反斜杠转义,且 JSON.parse 结果仍是字符串。
+ * 无法解析或语义不变场景原样返回(裸字符串字面量如 "hello" 不含转义,不受影响)。
+ */
+export function unwrapDoubleEncodedScript(script: string): { script: string; unwrapped: boolean } {
+  if (script.length >= 2 && script.startsWith('"') && script.endsWith('"') && script.includes("\\")) {
+    try {
+      const parsed = JSON.parse(script);
+      if (typeof parsed === "string" && parsed !== script) return { script: parsed, unwrapped: true };
+    } catch {
+      /* 不是合法 JSON 字符串字面量,原样使用 */
+    }
+  }
+  return { script, unwrapped: false };
+}
+
 export async function evalTool(config: BrowserConfig, args: Record<string, any>) {
   const page = await getPage(config);
-  const script = String(args.script ?? "");
+  const { script, unwrapped } = unwrapDoubleEncodedScript(String(args.script ?? ""));
   // 表达式优先;含语句(换行/分号/return)时包成 async IIFE。
   const wrapped = /[\n;]|^\s*return\b/.test(script)
     ? `(async () => {\n${script}\n})()`
@@ -782,7 +800,7 @@ export async function evalTool(config: BrowserConfig, args: Record<string, any>)
   } catch {
     result = raw === undefined ? null : String(raw);
   }
-  return { result };
+  return { result, ...(unwrapped ? { scriptUnwrapped: true } : {}) };
 }
 
 export async function screenshotTool(config: BrowserConfig, args: Record<string, any>, exec?: ToolRunContext) {
@@ -2198,7 +2216,14 @@ export async function recordTool(args: Record<string, any>) {
     const includeFailed = args.includeFailed === true;
     const failedCount = includeFailed ? 0 : calls.filter((c) => c.ok === false).length;
     const usable = includeFailed ? calls : calls.filter((c) => c.ok !== false);
-    const rawSteps: ReplayStep[] = usable.map((c) => ({ tool: c.tool, args: c.args ?? {}, ...(c.meta !== undefined ? { meta: c.meta } : {}) }));
+    const rawSteps: ReplayStep[] = usable.map((c) => {
+      // browser_eval:入参 script 若被 JSON 双重序列化,保存前解码,录制文件保持干净。
+      if (c.tool === "browser_eval" && typeof c.args?.script === "string") {
+        const { script } = unwrapDoubleEncodedScript(c.args.script);
+        if (script !== c.args.script) return { tool: c.tool, args: { ...c.args, script }, ...(c.meta !== undefined ? { meta: c.meta } : {}) };
+      }
+      return { tool: c.tool, args: c.args ?? {}, ...(c.meta !== undefined ? { meta: c.meta } : {}) };
+    });
     // stripReads: 剔除只读探查步骤(snapshot/elements/eval/network/status/cookies list),
     // 让回放更聚焦操作路径。注意 browser_eval 可能有副作用,默认关闭由调用方判断。
     const steps = args.stripReads === true ? rawSteps.filter((s) => !isReadonlyStep(s)) : rawSteps;
