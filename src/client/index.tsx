@@ -120,16 +120,6 @@ interface PendingConfirm {
   decision?: 'allowed' | 'denied'
 }
 
-interface PickResult {
-  selector: string
-  tag: string
-  id?: string
-  testid?: string
-  role?: string
-  name?: string
-  url?: string
-}
-
 interface LatestRun {
   runId: string
   ts: number
@@ -264,8 +254,6 @@ function BrowserFloatingOverlay() {
   const [lastRun, setLastRun] = useState<LatestRun | null>(null)
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null)
   const [reportOpen, setReportOpen] = useState(false)
-  const [pickActive, setPickActive] = useState(false)
-  const [pickResult, setPickResult] = useState<PickResult | null>(null)
 
   // Discover the node-half base path
   useEffect(() => {
@@ -346,40 +334,6 @@ function BrowserFloatingOverlay() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ id, decision }),
     }).catch(() => {})
-  }
-
-  // Element picking: start one-shot click capture, poll result (500ms, max 60s)
-  const startPick = () => {
-    if (pickActive) return
-    setPickResult(null)
-    setPickActive(true)
-    fetch(`${base}/pick`, { method: 'POST' })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .catch(() => {})
-    const deadline = Date.now() + 60_000
-    const timer = setInterval(() => {
-      if (Date.now() > deadline) {
-        clearInterval(timer)
-        setPickActive(false)
-        return
-      }
-      fetch(`${base}/pick`, { cache: 'no-store' })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d: { pick?: PickResult | null } | null) => {
-          if (d?.pick) {
-            clearInterval(timer)
-            setPickActive(false)
-            setPickResult(d.pick)
-          }
-        })
-        .catch(() => {})
-    }, 500)
-  }
-
-  const copyPickSelector = () => {
-    const sel = pickResult?.selector
-    if (!sel) return
-    navigator.clipboard?.writeText(sel).catch(() => {})
   }
 
   // Poll navigation history when modal is open
@@ -814,26 +768,6 @@ function BrowserFloatingOverlay() {
               },
               status?.open ? `${status.title || ''} (${status.url || ''})` : '浏览器实时大屏',
             ),
-            // Element Pick Button (one-shot click capture → selector)
-            createElement(
-              'button',
-              {
-                type: 'button',
-                title: pickActive ? '拾取中:在浏览器窗口点击任意元素' : '点选元素生成 selector',
-                onClick: startPick,
-                style: {
-                  flex: 'none',
-                  padding: '2px 10px',
-                  border: `1px solid ${pickActive ? '#f59e0b' : p.border}`,
-                  borderRadius: '6px',
-                  background: pickActive ? 'rgba(245, 158, 11, 0.12)' : 'transparent',
-                  color: pickActive ? '#f59e0b' : p.secondary,
-                  cursor: 'pointer',
-                  fontSize: '12px',
-                },
-              },
-              pickActive ? '◎ 拾取中…' : '🎯 点选元素',
-            ),
             createElement(
               'button',
               {
@@ -856,56 +790,6 @@ function BrowserFloatingOverlay() {
               '✕',
             ),
           ),
-          // Picked Element Result Bar (selector + copy)
-          pickResult !== null &&
-            createElement(
-              'div',
-              {
-                style: {
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  padding: '6px 8px',
-                  borderRadius: '8px',
-                  border: '1px solid #10b981',
-                  background: dark ? 'rgba(16, 185, 129, 0.1)' : 'rgba(16, 185, 129, 0.06)',
-                  fontSize: '12px',
-                },
-              },
-              createElement(
-                'div',
-                { style: { flex: 1, minWidth: 0 } },
-                createElement(
-                  'div',
-                  { style: { color: p.primary, fontFamily: 'monospace', wordBreak: 'break-all' } },
-                  pickResult.selector,
-                ),
-                createElement(
-                  'div',
-                  { style: { color: p.tertiary, marginTop: '2px' } },
-                  `${pickResult.tag}${pickResult.role ? ` · role=${pickResult.role}` : ''}${pickResult.name ? ` · "${pickResult.name}"` : ''} — 可作为 browser_click/type/select 的 selector 告诉 agent`,
-                ),
-              ),
-              createElement(
-                'button',
-                {
-                  type: 'button',
-                  onClick: copyPickSelector,
-                  style: {
-                    flex: 'none',
-                    padding: '4px 10px',
-                    border: 'none',
-                    borderRadius: '6px',
-                    background: '#10b981',
-                    color: '#fff',
-                    cursor: 'pointer',
-                    fontSize: '12px',
-                    fontWeight: 600,
-                  },
-                },
-                '复制 selector',
-              ),
-            ),
           // Large Screenshot
           status?.open
             ? createElement('img', {

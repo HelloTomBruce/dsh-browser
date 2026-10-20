@@ -7,10 +7,22 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ReefContext, WebRoute } from "../lib/types.js";
 import type { BrowserConfig } from "./types.js";
 import { activePage, historyOf, currentProfile, testLogOf, currentPause, getPendingConfirm, resolveConfirm } from "./session.js";
-import { statusTool, pickElementInjector, takePickResult } from "./tools.js";
+import { statusTool } from "./tools.js";
 import { listRecordings, recordingDetail, deleteRecording } from "./recordings.js";
 import { latestRun, listRuns, renderHtmlReport } from "./reports.js";
 import { urlPath, sendText, sendJson, readJsonBody } from "../lib/http.js";
+
+/** 展示层参数截断:单字段 JSON 超过 300 字符截断(仅用于面板轨迹显示,不进录制)。 */
+function truncateForDisplay(args: unknown): unknown {
+  if (typeof args !== "object" || args === null) return args;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args as Record<string, unknown>)) {
+    const s = JSON.stringify(v);
+    out[k] = s && s.length > 300 ? `${s.slice(0, 300)}…(截断)` : v;
+  }
+  return out;
+}
+
 
 export function registerBrowserApi(ctx: ReefContext, config: BrowserConfig, base: string) {
   const webServer = ctx.get<{ register(route: WebRoute): () => void }>("webServer");
@@ -38,9 +50,11 @@ export function registerBrowserApi(ctx: ReefContext, config: BrowserConfig, base
         }
         if (path === `${base}/log`) {
           // 操作轨迹:最近 50 次工具调用,按时间倒序。
+          // 展示层截断大字段(script/steps 等超 300 字符截断);
+          // 完整 args 保存在录制数据源里,回放不受影响。
           sendJson(res, 200, {
             profile: currentProfile,
-            calls: testLogOf().slice(0, 50),
+            calls: testLogOf().slice(0, 50).map((c) => ({ ...c, args: truncateForDisplay(c.args) })),
           });
           return;
         }
@@ -66,30 +80,6 @@ export function registerBrowserApi(ctx: ReefContext, config: BrowserConfig, base
             "content-length": Buffer.byteLength(html),
           });
           res.end(html);
-          return;
-        }
-        if (path === `${base}/pick`) {
-          // 元素拾取(面板「点选元素」):POST 启动一次性 click 捕获,GET 取结果(取后自清)。
-          if ((req.method ?? "GET") === "POST") {
-            const page = activePage();
-            if (page === null || page.isClosed()) {
-              sendText(res, 409, "browser not open");
-              return;
-            }
-            try {
-              await page.evaluate(pickElementInjector);
-              sendJson(res, 200, { started: true });
-            } catch (error) {
-              sendText(res, 500, `pick start failed: ${error instanceof Error ? error.message : String(error)}`);
-            }
-            return;
-          }
-          const page = activePage();
-          if (page === null || page.isClosed()) {
-            sendJson(res, 200, { pick: null });
-            return;
-          }
-          sendJson(res, 200, { pick: await takePickResult(page) });
           return;
         }
         if (path === `${base}/recordings`) {

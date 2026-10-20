@@ -252,14 +252,6 @@ export declare function contextTool(config: BrowserConfig, args: Record<string, 
     profile?: undefined;
 }>;
 /**
- * 页内拾取器(evaluate 注入):一次性 click 捕获 —— 点击任意元素时阻止默认行为,
- * 计算稳定 CSS 路径 + 元素信息存 window.__dshPickResult(面板轮询读取后自清)。
- * 与 aria walker 的 cssPath 同一套语义(#id → [data-testid] → nth-of-type 链)。
- */
-export declare function pickElementInjector(): void;
-/** 读取并清空拾取结果(ui.ts /pick GET 调用;无结果返回 null)。 */
-export declare function takePickResult(page: Page): Promise<Record<string, unknown> | null>;
-/**
  * 操作预告高亮:agent 即将 click/type/select/press 的元素在页面上琥珀色描边
  * ~1.5 秒。异步不阻塞(fire-and-forget,任何失败静默),不影响操作时序。
  */

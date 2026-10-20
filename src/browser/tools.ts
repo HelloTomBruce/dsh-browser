@@ -1013,74 +1013,8 @@ export async function contextTool(config: BrowserConfig, args: Record<string, an
 }
 
 // ---------------------------------------------------------------------------
-// 面板双向化支撑:元素拾取(人选元素 → selector)与操作预告高亮
+// 面板双向化支撑:操作预告高亮
 // ---------------------------------------------------------------------------
-
-/**
- * 页内拾取器(evaluate 注入):一次性 click 捕获 —— 点击任意元素时阻止默认行为,
- * 计算稳定 CSS 路径 + 元素信息存 window.__dshPickResult(面板轮询读取后自清)。
- * 与 aria walker 的 cssPath 同一套语义(#id → [data-testid] → nth-of-type 链)。
- */
-export function pickElementInjector(): void {
-  const w = window as unknown as Record<string, unknown>;
-  if (w.__dshPicking === true) return;
-  w.__dshPicking = true;
-  function cssPath(el: Element): string {
-    if (el.id) return `#${CSS.escape(el.id)}`;
-    const testid = el.getAttribute("data-testid") ?? el.getAttribute("data-test-id");
-    if (testid) return `[data-testid="${testid.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`;
-    const parts: string[] = [];
-    let cur: Element | null = el;
-    while (cur && cur !== document.body && parts.length < 6) {
-      const tag = cur.tagName.toLowerCase();
-      const parent: Element | null = cur.parentElement;
-      if (!parent) {
-        parts.unshift(tag);
-        break;
-      }
-      const sameTag = Array.from(parent.children).filter((c) => c.tagName === cur!.tagName);
-      const idx = sameTag.indexOf(cur) + 1;
-      parts.unshift(sameTag.length > 1 ? `${tag}:nth-of-type(${idx})` : tag);
-      cur = parent;
-    }
-    return parts.join(" > ");
-  }
-  const handler = (e: MouseEvent) => {
-    const el = e.target instanceof Element ? e.target : null;
-    if (el === null) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const aria = el.getAttribute("aria-label");
-    w.__dshPickResult = {
-      selector: cssPath(el),
-      tag: el.tagName.toLowerCase(),
-      id: el.id ?? "",
-      testid: el.getAttribute("data-testid") ?? el.getAttribute("data-test-id") ?? "",
-      role: el.getAttribute("role") ?? "",
-      name: aria && aria.trim() ? aria.trim().slice(0, 60) : ((el as HTMLElement).innerText || el.textContent || "").trim().slice(0, 60),
-      url: location.href,
-    };
-    w.__dshPicking = false;
-    document.removeEventListener("click", handler, true);
-  };
-  document.addEventListener("click", handler, true);
-}
-
-/** 读取并清空拾取结果(ui.ts /pick GET 调用;无结果返回 null)。 */
-export async function takePickResult(page: Page): Promise<Record<string, unknown> | null> {
-  try {
-    const r = await page.evaluate(() => {
-      const w = window as unknown as Record<string, unknown>;
-      const out = (w.__dshPickResult as Record<string, unknown> | undefined) ?? null;
-      w.__dshPickResult = null;
-      w.__dshPicking = false;
-      return out;
-    });
-    return r as Record<string, unknown> | null;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * 操作预告高亮:agent 即将 click/type/select/press 的元素在页面上琥珀色描边

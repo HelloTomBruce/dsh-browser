@@ -19,17 +19,11 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
   setToolsLogger((m) => ctx.logger?.info?.(m));
   const timeout = (ms?: number) => ms ?? config.timeoutMs;
 
-  /** 参数净化:大字段(script/fields 等)截断,避免操作日志膨胀。 */
-  function sanitizeArgs(args: any): any {
-    if (typeof args !== "object" || args === null) return args;
-    const out: any = {};
-    for (const [k, v] of Object.entries(args)) {
-      const s = JSON.stringify(v);
-      out[k] = s && s.length > 300 ? `${s.slice(0, 300)}…(截断)` : v;
-    }
-    return out;
-  }
-
+  /**
+   * 打点包装:每次工具调用记录操作轨迹(测试报告 / 录制数据源)。
+   * 注意:记录必须保留完整原始 args —— 录制/回放依赖脚本、steps 数组等大字段的
+   * 完整性(截断会让回放得到损坏的 script / 空的 steps)。展示层截断在 ui.ts 做。
+   */
   /** 会触发真实 DOM 事件的 agent 工具:执行前后打点,混合录制时用于区分人手与工具回声。 */
   const AGENT_DOM_TOOLS = new Set([
     "browser_click", "browser_type", "browser_select", "browser_press",
@@ -60,7 +54,6 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     const original = def.execute;
     def.execute = async (args: any, exec: ToolRunContext) => {
       const t0 = Date.now();
-      const sanitized = sanitizeArgs(args);
       const domTool = AGENT_DOM_TOOLS.has(def.name);
       if (domTool) noteAgentAction(); // 去重窗口起点:即将产生页内事件
       if (PREVIEW_TOOLS.has(def.name)) {
@@ -77,7 +70,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
       try {
         const value = await original(args, exec);
         if (domTool) noteAgentAction(); // 事件可能在 await 期间/之后才派发
-        const call = recordCall({ tool: def.name, args: sanitized, ok: true, ms: Date.now() - t0, ts: Date.now() });
+        const call = recordCall({ tool: def.name, args, ok: true, ms: Date.now() - t0, ts: Date.now() });
         // 录制中且步骤使用 selector:采集选择器指纹,供回放自愈(formatVersion 2)。
         if (isRecording() && SELECTOR_STEP_TOOLS.has(def.name) && typeof args?.selector === "string") {
           const page = activePage();
@@ -90,7 +83,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
       } catch (error) {
         recordCall({
           tool: def.name,
-          args: sanitized,
+          args,
           ok: false,
           ms: Date.now() - t0,
           ts: Date.now(),
