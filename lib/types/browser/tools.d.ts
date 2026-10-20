@@ -566,6 +566,7 @@ export declare function recordTool(args: Record<string, any>): Promise<{
     hint: string;
     warnings?: string[] | undefined;
     varsApplied?: number | undefined;
+    skippedFailed?: number | undefined;
     stripped?: number | undefined;
     saved: string;
     steps: number;

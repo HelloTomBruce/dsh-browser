@@ -68,12 +68,24 @@ describe("录制保真(大字段不截断)", () => {
     expect(seen[1].args.steps).toHaveLength(12);
   });
 
-  it("replayTool 按名字回放已保存录制(数据来自内存表,不经展示层)", async () => {
-    // replayTool 的 impls 由 register 注入;这里直接验证 name 解析出的步骤完整。
-    const result = await replayTool({ name: "fidelity" }, {
-      browser_eval: async () => ({}),
-      browser_batch: async () => ({}),
-    }, {});
-    expect(result).toMatchObject({ total: 2, passed: 2 });
+  it("save 默认剔除失败的实验步骤,includeFailed=true 保留", async () => {
+    startRecording();
+    recordCall({ tool: "browser_open", args: { url: "https://x" }, ok: true, ms: 1, ts: 1 });
+    // 失败实验步骤:超时的 select、无效 selector 的 click(旧 bug:回放被卡住)
+    recordCall({ tool: "browser_select", args: { selector: "#sel", option: "不存在" }, ok: false, ms: 30_000, ts: 2, error: "timeout" });
+    recordCall({ tool: "browser_click", args: { selector: "#nope" }, ok: false, ms: 5_000, ts: 3, error: "not found" });
+    recordCall({ tool: "browser_click", args: { selector: "#ok" }, ok: true, ms: 10, ts: 4 });
+    stopRecording();
+
+    const saved = (await recordTool({ action: "save", name: "no-failed" })) as Record<string, any>;
+    expect(saved.steps).toBe(2);
+    expect(saved.skippedFailed).toBe(2);
+    const steps = savedRecordings.get("no-failed")!.steps;
+    expect(steps.map((s: any) => s.args.selector ?? s.args.url)).toEqual(["https://x", "#ok"]);
+
+    // includeFailed=true 时全量保留(诊断用途)
+    const kept = (await recordTool({ action: "save", name: "with-failed", includeFailed: true })) as Record<string, any>;
+    expect(kept.steps).toBe(4);
+    expect(kept.skippedFailed).toBeUndefined();
   });
 });
