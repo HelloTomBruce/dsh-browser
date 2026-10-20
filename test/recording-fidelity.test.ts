@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { recordTool, replayTool, runReplay, unwrapDoubleEncodedScript } from "../src/browser/tools.js";
 import { savedRecordings, startRecording, stopRecording, recordCall, clearTestLog } from "../src/browser/session.js";
+import { reloadRecordingIfChanged } from "../src/browser/recordings.js";
 
 let dir: string;
 const origHome = process.env.DSH_HOME;
@@ -113,5 +114,26 @@ describe("录制保真(大字段不截断)", () => {
     const kept = (await recordTool({ action: "save", name: "with-failed", includeFailed: true })) as Record<string, any>;
     expect(kept.steps).toBe(4);
     expect(kept.skippedFailed).toBeUndefined();
+  });
+
+  it("磁盘热重载:手改录制文件后无需新会话即可用新内容", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const { readFile } = await import("node:fs/promises");
+    startRecording();
+    recordCall({ tool: "browser_click", args: { selector: "#old" }, ok: true, ms: 1, ts: 1 });
+    stopRecording();
+    const saved = (await recordTool({ action: "save", name: "hot-reload" })) as Record<string, any>;
+    expect(savedRecordings.get("hot-reload")!.steps[0].args.selector).toBe("#old");
+
+    // 直接编辑磁盘文件(模拟手修 JSON),等待越过 mtime 的 2s 余量
+    const raw = JSON.parse(await readFile(saved.file, "utf8"));
+    raw.steps[0].args.selector = "#fixed";
+    await new Promise((r) => setTimeout(r, 2_200));
+    writeFileSync(saved.file, JSON.stringify(raw));
+
+    expect(reloadRecordingIfChanged("hot-reload")).toBe(true);
+    expect(savedRecordings.get("hot-reload")!.steps[0].args.selector).toBe("#fixed");
+    // 未变化的再次调用返回 false
+    expect(reloadRecordingIfChanged("hot-reload")).toBe(false);
   });
 });

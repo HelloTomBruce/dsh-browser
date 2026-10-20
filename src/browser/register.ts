@@ -829,7 +829,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
       },
       render: (_args, value) =>
         value.loggedIn ? `登录完成: ${value.url}` : `等待登录超时,仍在: ${value.url}`,
-      timeoutMs: timeout(),
+      timeoutMs: timeout(600_000),
       execute: (args) => waitForLoginTool(config, args),
     }),
   );
@@ -1333,7 +1333,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
           : `${value.summary}\n${(value.results ?? []).map((r: any) => `${r.ok ? "✓" : "✗"} #${r.index} ${r.tool}${r.healed ? ` [自愈:${r.via}]` : ""}${r.error ? ` — ${String(r.error).slice(0, 120)}` : ""}`).join("\n")}`;
         return rowsInfo;
       },
-      timeoutMs: timeout(),
+      timeoutMs: timeout(600_000),
       execute: (args, exec) => replayTool(args, stepImpls, config, exec),
     }),
   );
@@ -1367,7 +1367,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
         required: ["total", "passed", "failed", "healedCount", "results", "summary"],
       },
       render: (_args, value) => `${value.summary}\n${(value.results ?? []).map((r: any) => `${r.ok ? "✓" : "✗"} #${r.index} ${r.tool}${r.error ? ` — ${String(r.error).slice(0, 120)}` : ""}`).join("\n")}`,
-      timeoutMs: timeout(),
+      timeoutMs: timeout(600_000),
       execute: (args) => batchTool(args, stepImpls),
     }),
   );

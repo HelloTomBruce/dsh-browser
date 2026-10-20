@@ -4,7 +4,7 @@
 // 写文件用 tmp + rename 原子替换,避免半写。名字只保留 [A-Za-z0-9._-],
 // 防止路径穿越。
 
-import { mkdirSync, readdirSync, readFileSync, writeFileSync, renameSync, rmSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync, renameSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { savedRecordings } from "./session.js";
@@ -71,6 +71,37 @@ export function deleteRecordingFile(name: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * 磁盘热重载:录制文件被外部编辑(手修 JSON)后,同会话内 browser_replay 仍用内存旧缓存。
+ * 比较文件 mtime 与内存 savedAt(留 2s 余量容忍写入延迟),更新过则重新加载进内存表。
+ * 返回是否发生了重载;文件不存在或损坏时静默保留内存版。
+ */
+export function reloadRecordingIfChanged(name: string): boolean {
+  const mem = savedRecordings.get(name);
+  const file = join(recordingsDir(), `${safeName(name)}.json`);
+  let mtime: number;
+  try {
+    mtime = statSync(file).mtimeMs;
+  } catch {
+    return false;
+  }
+  if (mem !== undefined && mtime <= mem.savedAt + 2_000) return false;
+  try {
+    const data = JSON.parse(readFileSync(file, "utf8")) as { formatVersion?: number; steps?: ReplayStep[]; savedAt?: number };
+    if (data !== null && typeof data === "object" && Array.isArray(data.steps)) {
+      savedRecordings.set(name, {
+        steps: data.steps,
+        // 记 mtime 而非文件内 savedAt:手改只更新 mtime,用它能识别后续再次编辑。
+        savedAt: mtime,
+      });
+      return true;
+    }
+  } catch {
+    /* 坏文件:保留内存版 */
+  }
+  return false;
 }
 
 /** 录制列表(面板 / browser_record list 共用)。 */
