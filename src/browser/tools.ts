@@ -14,12 +14,13 @@ import {
   setPauseInstruction, clearPauseInstruction,
   setPendingConfirm, getPendingConfirm, clearPendingConfirm,
   pageRefsOf, loadPlaywright, namedContextsOf, registerTabPage, attachPage,
-  snapshotCacheOf, setSnapshotCache,
+  snapshotCacheOf, setSnapshotCache, pushSnapshotVersion, snapshotVersionEntry,
 } from "./session.js";
 import { saveRecordingFile, listRecordings, deleteRecording, safeName as sanitizeName, reloadRecordingIfChanged } from "./recordings.js";
 import { serializeRows, formatFromFile, parseCsv } from "./extract.js";
 import { appendRun, listRuns, getRun, latestRun, makeRunId, renderMarkdownReport, renderHtmlReport, type RunRecord } from "./reports.js";
 import { workspaceBaseDir } from "../lib/tools.js";
+import { injectWalker } from "./walker.js";
 
 /** 读取 PNG 文件头(IHDR)中的宽高,不解码像素(导出供测试)。 */
 export function pngSize(buf: Buffer): { width: number; height: number } {
@@ -87,121 +88,19 @@ export function compressText(text: string): string {
 }
 
 /**
- * 页内 ARIA 树构建(自包含函数,page.evaluate 序列化注入;禁止引用模块级变量)。
+ * 页内 ARIA 树构建(walker 单一来源:roleOf/nameOf/cssPath/isVisible 与
+ * INTERACTIVE/STRUCTURAL 集合来自 walker.ts,构建期拼装注入)。
  * 遍历 DOM:结构角色(navigation/main/form/table/heading…)直接打印;
  * 可交互元素分配 ref=e1..eN 并附稳定 CSS 路径;无语义容器(div/span)穿透。
  * 输出形如 `- button "登录" [ref=e3]` 的缩进树,供纯文本模型定位操作目标。
  */
-function buildAriaTree(payload: { maxRefs: number; scope: string }): {
+const buildAriaTree = injectWalker<{ maxRefs: number; scope: string }, {
   tree: string;
   refs: { ref: string; role: string; name: string; selector: string }[];
   truncated: boolean;
   scopeMissing: boolean;
-} {
-  const INTERACTIVE = new Set([
-    "link", "button", "textbox", "checkbox", "radio", "combobox", "listbox",
-    "searchbox", "slider", "spinbutton", "switch", "tab", "menuitem", "option", "treeitem",
-  ]);
-  const STRUCTURAL = new Set([
-    "navigation", "main", "banner", "contentinfo", "form", "search", "complementary",
-    "region", "dialog", "alert", "table", "list", "heading", "toolbar", "menu", "menubar",
-    "tablist", "tree", "grid",
-  ]);
-  const SKIP_TAGS = new Set(["script", "style", "template", "noscript", "svg", "path", "link", "meta", "br"]);
-
-  function roleOf(el: Element): string {
-    const explicit = el.getAttribute("role");
-    if (explicit) return explicit.trim().split(/\s+/)[0] ?? "";
-    const tag = el.tagName.toLowerCase();
-    switch (tag) {
-      case "a": return el.hasAttribute("href") ? "link" : "";
-      case "button": return "button";
-      case "input": {
-        const t = (el.getAttribute("type") ?? "text").toLowerCase();
-        if (t === "checkbox") return "checkbox";
-        if (t === "radio") return "radio";
-        if (t === "range") return "slider";
-        if (t === "number") return "spinbutton";
-        if (t === "search") return "searchbox";
-        if (["button", "submit", "reset", "image"].includes(t)) return "button";
-        if (["hidden", "file"].includes(t)) return "";
-        return "textbox";
-      }
-      case "textarea": return "textbox";
-      case "select": return "combobox";
-      case "nav": return "navigation";
-      case "main": return "main";
-      case "header": return "banner";
-      case "footer": return "contentinfo";
-      case "form": return "form";
-      case "h1": case "h2": case "h3": case "h4": case "h5": case "h6": return "heading";
-      case "ul": case "ol": return "list";
-      case "li": return "listitem";
-      case "table": return "table";
-      case "dialog": return "dialog";
-      case "summary": return "button";
-      default: return "";
-    }
-  }
-
-  function nameOf(el: Element, role: string): string {
-    const aria = el.getAttribute("aria-label");
-    if (aria && aria.trim()) return aria.trim().slice(0, 60);
-    const labelledby = el.getAttribute("aria-labelledby");
-    if (labelledby) {
-      const t = labelledby
-        .split(/\s+/)
-        .map((id) => document.getElementById(id)?.textContent?.trim() ?? "")
-        .join(" ")
-        .trim();
-      if (t) return t.slice(0, 60);
-    }
-    if (el.id) {
-      const lab = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-      const t = lab?.textContent?.trim();
-      if (t) return t.slice(0, 60);
-    }
-    if (["textbox", "searchbox", "combobox", "spinbutton"].includes(role)) {
-      const ph = el.getAttribute("placeholder");
-      if (ph && ph.trim()) return ph.trim().slice(0, 60);
-    }
-    const text = ((el as HTMLElement).innerText || el.textContent || "").trim().replace(/\s+/g, " ");
-    if (text) return text.slice(0, 60);
-    const title = el.getAttribute("title");
-    if (title && title.trim()) return title.trim().slice(0, 60);
-    return "";
-  }
-
-  /** 稳定 CSS 路径:#id → [data-testid] → nth-of-type 链(≤6 层)。 */
-  function cssPath(el: Element): string {
-    if (el.id) return `#${CSS.escape(el.id)}`;
-    const testid = el.getAttribute("data-testid") ?? el.getAttribute("data-test-id");
-    if (testid) return `[data-testid="${testid.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`;
-    const parts: string[] = [];
-    let cur: Element | null = el;
-    while (cur && cur !== document.body && parts.length < 6) {
-      const tag = cur.tagName.toLowerCase();
-      const parent: Element | null = cur.parentElement;
-      if (!parent) {
-        parts.unshift(tag);
-        break;
-      }
-      const sameTag = Array.from(parent.children).filter((c) => c.tagName === cur!.tagName);
-      const idx = sameTag.indexOf(cur) + 1;
-      parts.unshift(sameTag.length > 1 ? `${tag}:nth-of-type(${idx})` : tag);
-      cur = parent;
-    }
-    return parts.join(" > ");
-  }
-
-  function isVisible(el: Element): boolean {
-    if (el.getAttribute("aria-hidden") === "true") return false;
-    const rect = el.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) return false;
-    const style = getComputedStyle(el);
-    return style.visibility !== "hidden" && style.display !== "none";
-  }
-
+}>((payload, w) => {
+  const { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible } = w;
   const lines: string[] = [];
   const refs: { ref: string; role: string; name: string; selector: string }[] = [];
   let truncated = false;
@@ -247,110 +146,19 @@ function buildAriaTree(payload: { maxRefs: number; scope: string }): {
   if (root === null) return { tree: "", refs, truncated: false, scopeMissing: true };
   walk(root, 0);
   return { tree: lines.join("\n"), refs, truncated, scopeMissing: false };
-}
+});
 
 /**
  * 页内语义查找:只收集匹配 query 的可交互元素(不构建全量树)。
- * role/name/cssPath/isVisible 与 buildAriaTree 保持同一套语义(此处内联副本,
- * evaluate 序列化不允许闭包引用);改动任一处时同步另一处。
+ * role/name/cssPath/isVisible 与 buildAriaTree 同一来源(walker.ts 单一来源,
+ * 构建期拼装注入),语义天然一致,不再需要手工同步副本。
  */
-function findInteractive(payload: { query: string; exact: boolean; scope: string; limit: number }): {
+const findInteractive = injectWalker<{ query: string; exact: boolean; scope: string; limit: number }, {
   matches: { role: string; name: string; selector: string; ancestors: string[] }[];
   candidates: { role: string; name: string }[];
   scanned: number;
-} {
-  const INTERACTIVE = new Set([
-    "link", "button", "textbox", "checkbox", "radio", "combobox", "listbox",
-    "searchbox", "slider", "spinbutton", "switch", "tab", "menuitem", "option", "treeitem",
-  ]);
-  const STRUCTURAL = new Set([
-    "navigation", "main", "banner", "contentinfo", "form", "search", "complementary",
-    "region", "dialog", "alert", "table", "list", "heading", "toolbar", "menu", "menubar",
-    "tablist", "tree", "grid",
-  ]);
-  const SKIP_TAGS = new Set(["script", "style", "template", "noscript", "svg", "path", "link", "meta", "br"]);
-
-  function roleOf(el: Element): string {
-    const explicit = el.getAttribute("role");
-    if (explicit) return explicit.trim().split(/\s+/)[0] ?? "";
-    const tag = el.tagName.toLowerCase();
-    switch (tag) {
-      case "a": return el.hasAttribute("href") ? "link" : "";
-      case "button": return "button";
-      case "input": {
-        const t = (el.getAttribute("type") ?? "text").toLowerCase();
-        if (t === "checkbox") return "checkbox";
-        if (t === "radio") return "radio";
-        if (t === "range") return "slider";
-        if (t === "number") return "spinbutton";
-        if (t === "search") return "searchbox";
-        if (["button", "submit", "reset", "image"].includes(t)) return "button";
-        if (["hidden", "file"].includes(t)) return "";
-        return "textbox";
-      }
-      case "textarea": return "textbox";
-      case "select": return "combobox";
-      case "summary": return "button";
-      default: return "";
-    }
-  }
-
-  function nameOf(el: Element, role: string): string {
-    const aria = el.getAttribute("aria-label");
-    if (aria && aria.trim()) return aria.trim().slice(0, 60);
-    const labelledby = el.getAttribute("aria-labelledby");
-    if (labelledby) {
-      const t = labelledby
-        .split(/\s+/)
-        .map((id) => document.getElementById(id)?.textContent?.trim() ?? "")
-        .join(" ")
-        .trim();
-      if (t) return t.slice(0, 60);
-    }
-    if (el.id) {
-      const lab = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-      const t = lab?.textContent?.trim();
-      if (t) return t.slice(0, 60);
-    }
-    if (["textbox", "searchbox", "combobox", "spinbutton"].includes(role)) {
-      const ph = el.getAttribute("placeholder");
-      if (ph && ph.trim()) return ph.trim().slice(0, 60);
-    }
-    const text = ((el as HTMLElement).innerText || el.textContent || "").trim().replace(/\s+/g, " ");
-    if (text) return text.slice(0, 60);
-    const title = el.getAttribute("title");
-    if (title && title.trim()) return title.trim().slice(0, 60);
-    return "";
-  }
-
-  function cssPath(el: Element): string {
-    if (el.id) return `#${CSS.escape(el.id)}`;
-    const testid = el.getAttribute("data-testid") ?? el.getAttribute("data-test-id");
-    if (testid) return `[data-testid="${testid.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`;
-    const parts: string[] = [];
-    let cur: Element | null = el;
-    while (cur && cur !== document.body && parts.length < 6) {
-      const tag = cur.tagName.toLowerCase();
-      const parent: Element | null = cur.parentElement;
-      if (!parent) {
-        parts.unshift(tag);
-        break;
-      }
-      const sameTag = Array.from(parent.children).filter((c) => c.tagName === cur!.tagName);
-      const idx = sameTag.indexOf(cur) + 1;
-      parts.unshift(sameTag.length > 1 ? `${tag}:nth-of-type(${idx})` : tag);
-      cur = parent;
-    }
-    return parts.join(" > ");
-  }
-
-  function isVisible(el: Element): boolean {
-    if (el.getAttribute("aria-hidden") === "true") return false;
-    const rect = el.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) return false;
-    const style = getComputedStyle(el);
-    return style.visibility !== "hidden" && style.display !== "none";
-  }
+}>((payload, w) => {
+  const { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible } = w;
 
   /** 最近的结构化祖先(区域上下文,帮助区分多命中)。 */
   function ancestorsOf(el: Element): string[] {
@@ -400,7 +208,7 @@ function findInteractive(payload: { query: string; exact: boolean; scope: string
     }
   }
   return { matches, candidates, scanned };
-}
+});
 
 /** 最长公共子串长度(小写比较;零依赖,导出供测试)。 */
 export function lcsScore(a: string, b: string): number {
@@ -535,9 +343,12 @@ export async function snapshotTool(config: BrowserConfig, args: Record<string, a
   const ariaMode = args.mode === "aria";
   const identity = { url: page.url(), title: await page.title() };
 
-  // 增量模式:since 命中缓存版本 → 内容未变返回 unchanged;变了只返回变化区。
+  // 增量模式(F3 历史版本):since 命中环形窗口内任一保留版本 → 未变返回
+  // unchanged,变了只返回相对该版本的行级 diff;更旧/未知版本回落全量标 stale。
   const cache = snapshotCacheOf(page);
-  const canDiff = since !== undefined && cache !== undefined && cache.version === since;
+  const capacity = config.snapshotHistory ?? 5;
+  const base = since !== undefined ? snapshotVersionEntry(cache, since) : undefined;
+  const canDiff = base !== undefined;
 
   let content: string; // 本次的规范化文本(text 模式压缩后 / aria 模式树)
   let extra: Record<string, unknown> = {};
@@ -578,18 +389,25 @@ export async function snapshotTool(config: BrowserConfig, args: Record<string, a
   }
 
   const key = ariaMode ? "aria" : "text";
-  if (canDiff && cache![key] === content) {
+  if (canDiff && base![key] === content) {
     return { unchanged: true, contentVersion: cache!.version, ...(scope !== "" ? { scope } : {}), ...identity, ...extra };
   }
   if (canDiff) {
-    const d = diffLines(cache![key], content);
-    setSnapshotCache(page, { version: cache!.version + 1, text: ariaMode ? cache!.text : content, aria: ariaMode ? content : cache!.aria });
+    const d = diffLines(base![key], content);
+    // 另一模式的内容沿用最新版本的记录(与 v0.3 语义一致:两模式共用版本序列)。
+    const latest = cache!.history[cache!.history.length - 1];
+    const next = pushSnapshotVersion(
+      cache,
+      { text: ariaMode ? latest.text : content, aria: ariaMode ? content : latest.aria },
+      capacity,
+    );
+    setSnapshotCache(page, next);
     if (d.unchanged) {
-      return { unchanged: true, contentVersion: cache!.version + 1, ...(scope !== "" ? { scope } : {}), ...identity, ...extra };
+      return { unchanged: true, contentVersion: next.version, ...(scope !== "" ? { scope } : {}), ...identity, ...extra };
     }
     return {
       diff: true,
-      contentVersion: cache!.version + 1,
+      contentVersion: next.version,
       changedFrom: d.changedFrom,
       removed: d.removed,
       ...(scope !== "" ? { scope } : {}),
@@ -599,14 +417,16 @@ export async function snapshotTool(config: BrowserConfig, args: Record<string, a
       ...extra,
     };
   }
-  // 全量(不传 since,或 since 已过期 → 回落全量并附 stale 提示)
-  setSnapshotCache(page, {
-    version: (cache?.version ?? 0) + 1,
-    text: ariaMode ? (cache?.text ?? "") : content,
-    aria: ariaMode ? content : (cache?.aria ?? ""),
-  });
+  // 全量(不传 since,或 since 超出历史窗口 → 回落全量并附 stale 提示)
+  const latestEntry = cache?.history[cache.history.length - 1];
+  const next = pushSnapshotVersion(
+    cache,
+    { text: ariaMode ? (latestEntry?.text ?? "") : content, aria: ariaMode ? content : (latestEntry?.aria ?? "") },
+    capacity,
+  );
+  setSnapshotCache(page, next);
   return {
-    contentVersion: (cache?.version ?? 0) + 1,
+    contentVersion: next.version,
     ...(since !== undefined ? { stale: true } : {}),
     ...(scope !== "" ? { scope } : {}),
     [ariaMode ? "tree" : "text"]: content.slice(0, maxText),
@@ -1871,6 +1691,97 @@ export async function confirmTool(config: BrowserConfig, args: Record<string, an
   return { decision, id, reason, waitedMs: Date.now() - startedAt, detail };
 }
 
+// ---------------------------------------------------------------------------
+// F1 confirm 自动拦截(confirmMode: "auto",宿主层硬约束):
+// sensitiveTools 工具执行前解析目标 selector/ref → 页内取元素统一描述
+// (walker describeElement)→ 与 sensitivePatterns 子串匹配(大小写不敏感)
+// → 命中即复用上面的审批管线(confirmTool,弹面板卡等待允许/拒绝/超时)。
+// 未命中直接放行(一次页内 evaluate,与 preview 高亮同量级,无感知延迟)。
+// ---------------------------------------------------------------------------
+
+/** auto 模式默认敏感文本模式(提交/删除/支付类)。 */
+export const DEFAULT_SENSITIVE_PATTERNS = ["提交", "删除", "支付"];
+
+/** auto 模式默认参与判定的工具(已决:只拦 browser_click,type 误报率高)。 */
+export const DEFAULT_SENSITIVE_TOOLS = ["browser_click"];
+
+/** 敏感判定的元素描述(与 walker describeElement 字段子集对应)。 */
+export interface SensitiveDesc {
+  role: string;
+  name: string;
+  text: string;
+  id: string;
+  testid: string;
+  tag: string;
+}
+
+/** 敏感判定的页内目标描述提取(walker 统一元素描述,构建期拼装注入)。 */
+const describeTarget = injectWalker<string, SensitiveDesc | null>((sel, w) => {
+  const el = document.querySelector(sel);
+  return el === null ? null : (w.describeElement(el) as SensitiveDesc);
+});
+
+/**
+ * 纯逻辑:元素描述命中了哪些敏感模式(role/name/text/id/testid/tag 拼接后
+ * 子串匹配,大小写不敏感;空白模式忽略)。返回命中的模式列表(空 = 放行)。
+ * 导出供测试。
+ */
+export function sensitiveHits(desc: SensitiveDesc | null, patterns: string[]): string[] {
+  if (desc === null) return [];
+  const hay = [desc.role, desc.name, desc.text, desc.id, desc.testid, desc.tag]
+    .filter((s): s is string => typeof s === "string")
+    .join(" ")
+    .toLowerCase();
+  if (hay === "") return [];
+  return patterns.filter(
+    (p) => typeof p === "string" && p.trim() !== "" && hay.includes(p.trim().toLowerCase()),
+  );
+}
+
+/**
+ * auto 模式审批闸:命中敏感模式时经 confirmTool 弹审批等待用户决策,
+ * 拒绝/超时抛错(调用方该步失败),允许则返回继续执行原工具。
+ * 不满足前置条件(非 auto / 工具不在 sensitiveTools / 无模式 / 无活动页 /
+ * 无目标 selector / 页内取描述失败)一律直接放行,由原工具自行处理错误。
+ * page 参数仅供测试注入;缺省取当前活动页。
+ */
+export async function confirmGate(
+  config: BrowserConfig,
+  tool: string,
+  args: Record<string, any>,
+  page?: Page | null,
+): Promise<void> {
+  if (config.confirmMode !== "auto") return;
+  if (tool === "browser_confirm") return; // 审批本身不拦
+  const tools = config.sensitiveTools ?? DEFAULT_SENSITIVE_TOOLS;
+  if (!tools.includes(tool)) return;
+  const patterns = config.sensitivePatterns ?? DEFAULT_SENSITIVE_PATTERNS;
+  if (patterns.length === 0) return;
+  const active = page !== undefined ? page : activePage();
+  if (active === null || active === undefined) return;
+  const sel =
+    typeof args?.selector === "string" && args.selector
+      ? args.selector
+      : typeof args?.ref === "string" && args.ref
+        ? (pageRef(active, args.ref)?.selector ?? "")
+        : "";
+  if (sel === "") return; // 无目标 selector(如页面级按键):不拦
+  let desc: SensitiveDesc | null = null;
+  try {
+    desc = (await active.evaluate(describeTarget, sel)) as SensitiveDesc | null;
+  } catch {
+    return; // 页面不可达/导航中:交给原工具报错,不因闸门误伤
+  }
+  const hits = sensitiveHits(desc, patterns);
+  if (hits.length === 0) return;
+  const label = desc !== null && (desc.name || desc.text) ? `(${desc.role !== "" ? `${desc.role} ` : ""}"${desc.name || desc.text}")` : "";
+  await confirmTool(config, {
+    reason: `confirmMode:auto 硬拦截:${tool} 目标元素命中敏感模式 [${hits.join(", ")}] ${label}`.trim(),
+    tool,
+    args,
+  });
+}
+
 /** 断言:条件在 timeoutMs 内成立则通过,否则失败并自动截图存证据。visual 断言走像素比对。 */
 export async function assertTool(config: BrowserConfig, args: Record<string, any>, exec?: ToolRunContext) {
   const page = await getPage(config);
@@ -2182,40 +2093,33 @@ export const SELECTOR_STEP_TOOLS = new Set([
   "browser_upload",
 ]);
 
+/** 拾取指纹的页内提取(walker 统一元素描述结构;构建期拼装注入)。 */
+const pickElementInjector = injectWalker<Element, SelectorHint | null>((el, w) => {
+  const d = w.describeElement(el);
+  return {
+    testid: d.testid !== "" ? d.testid : undefined,
+    id: d.id !== "" ? d.id : undefined,
+    tag: d.tag,
+    role: d.role !== "" ? d.role : undefined,
+    name: d.name !== "" ? d.name : undefined,
+    text: d.text !== "" ? d.text : undefined,
+  };
+});
+
 /**
  * 采集选择器指向元素的指纹(页内 evaluate;找不到元素返回 null)。
  * 指纹是回放自愈的降级候选来源:testid / role+name / text / id / tag+text。
+ * F5 收敛:元素描述(role/name/text)改用 walker 单一来源
+ * (describeElement),与 aria 快照/find/录制回声共用同一套语义;相比旧
+ * 内联副本,role 推断更完整(slider/spinbutton/searchbox/heading 等),
+ * name 补齐 labelledby/label[for]/title 兜底 —— 指纹只作自愈降级候选,
+ * 语义增强只会让自愈命中率更高,不改变任何主链路行为。
  */
 export async function captureSelectorHint(page: Page, selector: string): Promise<SelectorHint | null> {
   return page
     .locator(selector)
     .first()
-    .evaluate((el) => {
-      const tag = el.tagName.toLowerCase();
-      const type = (el.getAttribute("type") ?? "").toLowerCase();
-      const roleAttr = (el.getAttribute("role") ?? "").trim().split(/\s+/)[0] ?? "";
-      const implicit =
-        tag === "a" && el.hasAttribute("href") ? "link"
-        : tag === "button" || tag === "summary" || (tag === "input" && ["button", "submit", "reset", "image"].includes(type)) ? "button"
-        : tag === "textarea" || (tag === "input" && !["hidden", "checkbox", "radio", "file"].includes(type)) ? "textbox"
-        : tag === "select" ? "combobox"
-        : tag === "input" && type === "checkbox" ? "checkbox"
-        : tag === "input" && type === "radio" ? "radio"
-        : "";
-      const text = ((el as HTMLElement).innerText || el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 60);
-      const name =
-        (el.getAttribute("aria-label") ?? "").trim() ||
-        (el.getAttribute("placeholder") ?? "").trim() ||
-        text;
-      return {
-        testid: el.getAttribute("data-testid") ?? el.getAttribute("data-test-id") ?? undefined,
-        id: el.id !== "" ? el.id : undefined,
-        tag,
-        role: (roleAttr || implicit) !== "" ? roleAttr || implicit : undefined,
-        name: name !== "" ? name : undefined,
-        text: text !== "" ? text : undefined,
-      };
-    })
+    .evaluate(pickElementInjector)
     .catch(() => null);
 }
 
@@ -2327,10 +2231,12 @@ export async function recordTool(args: Record<string, any>) {
   throw new Error(`unknown record action: ${action}`);
 }
 
-/** 回放选项(自愈开关与单次尝试超时,来自 config)。 */
+/** 回放选项(自愈开关与单次尝试超时,来自 config;retryFailed 为自动重试次数)。 */
 export interface ReplayOptions {
   healing?: boolean;
   healTimeoutMs?: number;
+  /** F2:步骤失败(含自愈链耗尽)后自动重试的次数,步骤间 500ms×n 线性退避。 */
+  retryFailed?: number;
 }
 
 /** 回放执行器(步骤 → 工具调用),由 register.ts 注入实现 map。支持选择器自愈。 */
@@ -2339,11 +2245,12 @@ export async function runReplay(
   impls: Record<string, (args: any) => Promise<unknown>>,
   failFast: boolean,
   opts: ReplayOptions = {},
-): Promise<{ total: number; passed: number; failed: number; healedCount: number; stoppedAt?: number; results: any[] }> {
+): Promise<{ total: number; passed: number; failed: number; healedCount: number; retries?: { attempted: number; recovered: number }; stoppedAt?: number; results: any[] }> {
   const results: any[] = [];
   let stoppedAt: number | null = null;
   let passed = 0;
   let healedCount = 0;
+  let retryAttempted = 0;
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     const impl = impls[step.tool];
@@ -2358,62 +2265,74 @@ export async function runReplay(
       hint !== undefined &&
       SELECTOR_STEP_TOOLS.has(step.tool) &&
       typeof step.args?.selector === "string";
-    if (!canHeal) {
-      try {
-        await impl(step.args ?? {});
-        passed++;
-        results.push({ index: i, tool: step.tool, ok: true });
-      } catch (e) {
-        results.push({ index: i, tool: step.tool, ok: false, error: e instanceof Error ? e.message : String(e) });
-        if (failFast) { stoppedAt = i; break; }
-      }
-      continue;
-    }
-    // 自愈路径:原选择器用较短超时先试,失败再按降级链逐个候选重试。
-    const healTimeout = opts.healTimeoutMs ?? 3000;
-    const quickArgs = {
-      ...step.args,
-      timeoutMs: Math.min(Number(step.args.timeoutMs ?? Number.POSITIVE_INFINITY) || Number.POSITIVE_INFINITY, healTimeout),
-    };
-    try {
-      await impl(quickArgs);
-      passed++;
-      results.push({ index: i, tool: step.tool, ok: true });
-      continue;
-    } catch (e0) {
-      const tried: string[] = [];
-      let healed: { via: string; selector: string } | null = null;
-      for (const candidate of healCandidates(hint)) {
-        tried.push(`${candidate.via}: ${candidate.selector}`);
+    /** 单次完整尝试(含自愈链);返回该次尝试的 result 行(带内部 healed 标记)。 */
+    const attempt = async (): Promise<{ ok: boolean; result: Record<string, any> }> => {
+      if (!canHeal) {
         try {
-          await impl({ ...step.args, selector: candidate.selector, timeoutMs: healTimeout });
-          healed = candidate;
-          break;
-        } catch {
-          /* 尝试下一个候选 */
+          await impl(step.args ?? {});
+          return { ok: true, result: { index: i, tool: step.tool, ok: true } };
+        } catch (e) {
+          return { ok: false, result: { index: i, tool: step.tool, ok: false, error: e instanceof Error ? e.message : String(e) } };
         }
       }
-      if (healed !== null) {
-        passed++;
-        healedCount++;
-        results.push({
-          index: i,
-          tool: step.tool,
-          ok: true,
-          healed: true,
-          via: healed.via,
-          resolved: healed.selector,
-        });
-      } else {
+      // 自愈路径:原选择器用较短超时先试,失败再按降级链逐个候选重试。
+      const healTimeout = opts.healTimeoutMs ?? 3000;
+      const quickArgs = {
+        ...step.args,
+        timeoutMs: Math.min(Number(step.args.timeoutMs ?? Number.POSITIVE_INFINITY) || Number.POSITIVE_INFINITY, healTimeout),
+      };
+      try {
+        await impl(quickArgs);
+        return { ok: true, result: { index: i, tool: step.tool, ok: true } };
+      } catch (e0) {
+        const tried: string[] = [];
+        let healed: { via: string; selector: string } | null = null;
+        for (const candidate of healCandidates(hint)) {
+          tried.push(`${candidate.via}: ${candidate.selector}`);
+          try {
+            await impl({ ...step.args, selector: candidate.selector, timeoutMs: healTimeout });
+            healed = candidate;
+            break;
+          } catch {
+            /* 尝试下一个候选 */
+          }
+        }
+        if (healed !== null) {
+          return {
+            ok: true,
+            result: { index: i, tool: step.tool, ok: true, healed: true, via: healed.via, resolved: healed.selector },
+          };
+        }
         const base = e0 instanceof Error ? e0.message : String(e0);
-        results.push({
-          index: i,
-          tool: step.tool,
+        return {
           ok: false,
-          error: `${base}${tried.length > 0 ? `; 自愈已尝试: ${tried.join(" | ")}` : ""}`,
-        });
-        if (failFast) { stoppedAt = i; break; }
+          result: { index: i, tool: step.tool, ok: false, error: `${base}${tried.length > 0 ? `; 自愈已尝试: ${tried.join(" | ")}` : ""}` },
+        };
       }
+    };
+    let outcome = await attempt();
+    let recovered = false;
+    // F2 retryFailed:步骤失败(自愈链耗尽)后自动重试,500ms×n 线性退避;
+    // 挽回则按通过计(标 recovered),重试耗尽才落到失败/failFast 停止语义。
+    if (!outcome.ok && (opts.retryFailed ?? 0) > 0) {
+      for (let n = 1; n <= (opts.retryFailed ?? 0); n++) {
+        await sleep(500 * n);
+        retryAttempted++;
+        const again = await attempt();
+        outcome = again;
+        if (again.ok) {
+          recovered = true;
+          break;
+        }
+      }
+    }
+    if (outcome.ok) {
+      passed++;
+      if (outcome.result.healed === true) healedCount++;
+      results.push(recovered ? { ...outcome.result, recovered: true } : outcome.result);
+    } else {
+      results.push(outcome.result);
+      if (failFast) { stoppedAt = i; break; }
     }
   }
   return {
@@ -2421,6 +2340,7 @@ export async function runReplay(
     passed,
     failed: results.length - passed,
     healedCount,
+    ...(retryAttempted > 0 ? { retries: { attempted: retryAttempted, recovered: results.filter((r) => r.recovered === true).length } } : {}),
     // null 不输出:outputSchema 中 stoppedAt 为 integer,省略比 null 兼容性更稳。
     ...(stoppedAt !== null ? { stoppedAt } : {}),
     results,
@@ -2506,11 +2426,197 @@ export function workspaceFilePath(cwd: string, file: string): string {
  * 规则化抽取:fields 定义抽取结构,next 选择器驱动翻页(maxPages 上限),
  * 行数超 maxRows 截断;format/file 控制序列化与落盘(json/csv/jsonl/markdown)。
  */
+// ---------------------------------------------------------------------------
+// F4 extract 字段建议(action: "suggest"):从命中容器首条记录(表格首行/卡片)
+// 自动推断字段结构,返回可直接交给抽取模式的 fields + 样本数据;
+// 推断不出规律结构时返回原因与容器概览,不猜。
+// ---------------------------------------------------------------------------
+
+/** suggest 采集的表格单元格信息(页内采集,纯函数消费)。 */
+export interface SuggestCell {
+  text: string;
+  href?: string;
+  src?: string;
+}
+
+/** suggest 页内分析结果(自包含 injectWalker 注入采集)。 */
+export interface SuggestAnalysis {
+  ok: boolean;
+  /** table: 表格行模式;list: 重复卡片/列表项模式。 */
+  kind?: "table" | "list";
+  /** 行/卡片选择器(抽取 fields 顶层的 multiple selector)。 */
+  rowSelector?: string;
+  headerTexts?: string[];
+  cells?: SuggestCell[];
+  item?: SuggestCell;
+  reason?: string;
+  overview?: { links: number; images: number; buttons: number; headings: number; rows: number; textChars: number };
+}
+
+/** suggest 的页内结构探测(injectWalker 注入;walker 提供 cssPath)。 */
+const suggestFieldsInPage = injectWalker<{ scope: string }, SuggestAnalysis>((payload, w) => {
+  const root = payload.scope !== "" ? document.querySelector(payload.scope) : document.body;
+  if (root === null) return { ok: false, reason: `scope 未命中: 页面中没有匹配 "${payload.scope}" 的元素` };
+  const cellOf = (el: Element): SuggestCell => {
+    const a = el.querySelector("a[href]");
+    const img = el.querySelector("img[src]");
+    return {
+      text: ((el as HTMLElement).innerText || el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 60),
+      ...(a !== null ? { href: a.getAttribute("href") ?? "" } : {}),
+      ...(img !== null ? { src: img.getAttribute("src") ?? "" } : {}),
+    };
+  };
+  // 1) 表格模式:≥2 行,且首行(或第二行)是数据行 → td 单元格结构
+  const rows = Array.from(root.querySelectorAll("table tr"));
+  if (rows.length >= 2) {
+    const first = rows[0]!;
+    let headerTexts: string[] = [];
+    let record: Element | null = null;
+    if (first.querySelector("th") !== null) {
+      headerTexts = Array.from(first.querySelectorAll("th, td")).map((c) =>
+        ((c as HTMLElement).innerText || c.textContent || "").trim(),
+      );
+      record = rows[1] ?? null;
+    } else {
+      record = first;
+    }
+    if (record !== null) {
+      const cells = Array.from(record.querySelectorAll("td, th")).map(cellOf);
+      if (cells.length > 0) {
+        return { ok: true, kind: "table", rowSelector: "table tr", headerTexts, cells };
+      }
+    }
+  }
+  // 2) 列表/卡片模式:ul/ol 下 ≥2 个直接 li,或同父 ≥3 个同名兄弟卡片容器
+  const list = root.querySelector("ul, ol");
+  if (list !== null) {
+    const lis = Array.from(list.children).filter((c) => c.tagName === "LI");
+    if (lis.length >= 2) {
+      const li = lis[0]!;
+      return {
+        ok: true,
+        kind: "list",
+        rowSelector: `${w.cssPath(list)} > li`,
+        item: cellOf(li),
+      };
+    }
+  }
+  // 3) 推断失败:不猜,给容器概览帮助 agent 手写 fields
+  return {
+    ok: false,
+    reason: "未发现规律结构(无 ≥2 行的表格,也无 ≥2 项的列表);请用 browser_elements/browser_snapshot 查看结构后手写 fields",
+    overview: {
+      links: root.querySelectorAll("a").length,
+      images: root.querySelectorAll("img").length,
+      buttons: root.querySelectorAll("button, [role='button']").length,
+      headings: root.querySelectorAll("h1, h2, h3, h4").length,
+      rows: rows.length,
+      textChars: ((root as HTMLElement).innerText || "").length,
+    },
+  };
+});
+
+/** 字段名净化:空白→下划线,限长 30,空回落 col_N。导出供测试。 */
+export function suggestFieldName(header: string | undefined, index: number): string {
+  const h = (header ?? "").trim().replace(/\s+/g, "_");
+  return h !== "" ? h.slice(0, 30) : `col_${index + 1}`;
+}
+
+/**
+ * 纯逻辑:由表头与首行单元格特征推断表格 fields(单元格文本/链接 href/图片 src)。
+ * 返回可直接放进 rows.fields 的嵌套字段数组。导出供测试。
+ */
+export function fieldsFromCells(headerTexts: string[], cells: SuggestCell[]): ExtractField[] {
+  const out: ExtractField[] = [];
+  cells.forEach((c, i) => {
+    const name = suggestFieldName(headerTexts[i], i);
+    const sel = `td:nth-of-type(${i + 1})`;
+    if (c.src !== undefined) out.push({ name: `${name}_src`, selector: `${sel} img`, attr: "src" });
+    if (c.href !== undefined) out.push({ name: `${name}_href`, selector: `${sel} a`, attr: "href" });
+    out.push({ name, selector: sel });
+  });
+  return out;
+}
+
+/**
+ * 纯逻辑:由首条卡片信息推断列表 fields(项文本/链接/图片)。
+ * 文本取第一个子元素(项自身无法用 querySelector 自选)。导出供测试。
+ */
+export function fieldsFromCard(item: SuggestCell): ExtractField[] {
+  const out: ExtractField[] = [];
+  if (item.src !== undefined) out.push({ name: "image", selector: "img", attr: "src" });
+  if (item.href !== undefined) out.push({ name: "link", selector: "a", attr: "href" });
+  out.push({ name: "text", selector: ":scope > *:nth-child(1)" });
+  return out;
+}
+
+/** 纯逻辑:由 fields 与单元格样本拼出首行样例(与抽取输出同构;按 td 序号对位)。导出供测试。 */
+export function sampleOfFields(fields: ExtractField[], cells: SuggestCell[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const f of fields) {
+    const m = /td:nth-of-type\((\d+)\)/.exec(f.selector);
+    const idx = m !== null ? Number(m[1]) - 1 : 0;
+    const c = cells[idx];
+    if (f.attr === "href") out[f.name] = c?.href ?? null;
+    else if (f.attr === "src") out[f.name] = c?.src ?? null;
+    else out[f.name] = c?.text ?? null;
+  }
+  return out;
+}
+
+/**
+ * suggest 汇总(纯逻辑):由页内分析结果组装「可直接交给抽取模式」的顶层 fields
+ * (单个 multiple rows 字段 + 行内嵌套字段)与样本。推断失败原样返回。导出供测试。
+ */
+export function suggestWrap(analysis: SuggestAnalysis): {
+  suggested: boolean;
+  kind?: "table" | "list";
+  rowSelector?: string;
+  headerTexts?: string[];
+  fields?: ExtractField[];
+  sample?: Record<string, unknown>;
+  reason?: string;
+  overview?: SuggestAnalysis["overview"];
+} {
+  if (!analysis.ok || analysis.kind === undefined || analysis.rowSelector === undefined) {
+    return { suggested: false, reason: analysis.reason ?? "结构不足以推断字段", ...(analysis.overview !== undefined ? { overview: analysis.overview } : {}) };
+  }
+  const rowFields =
+    analysis.kind === "table"
+      ? fieldsFromCells(analysis.headerTexts ?? [], analysis.cells ?? [])
+      : fieldsFromCard(analysis.item ?? { text: "" });
+  if (rowFields.length === 0) {
+    return { suggested: false, reason: "首条记录内未发现可抽取内容(文本/链接/图片)", ...(analysis.overview !== undefined ? { overview: analysis.overview } : {}) };
+  }
+  const sample = sampleOfFields(
+    rowFields,
+    analysis.kind === "table" ? (analysis.cells ?? []) : [analysis.item ?? { text: "" }],
+  );
+  return {
+    suggested: true,
+    kind: analysis.kind,
+    rowSelector: analysis.rowSelector,
+    ...(analysis.headerTexts !== undefined ? { headerTexts: analysis.headerTexts } : {}),
+    fields: [{ name: "rows", selector: analysis.rowSelector, multiple: true, fields: rowFields }],
+    sample,
+  };
+}
+
 export async function extractTool(config: BrowserConfig, args: Record<string, any>, exec?: ToolRunContext) {
   const page = await getPage(config);
+  // F4 字段建议模式:不抽取,只返回建议 fields + 样本(agent 微调后交给抽取模式)。
+  if (args.action === "suggest") {
+    const scope = typeof args.scope === "string" && args.scope !== "" ? args.scope : "";
+    const analysis = await page.evaluate(suggestFieldsInPage, { scope });
+    return {
+      action: "suggest",
+      ...suggestWrap(analysis),
+      ...(await pageIdentity(page)),
+    };
+  }
   const fields = args.fields as ExtractField[];
   if (!Array.isArray(fields) || fields.length === 0) {
-    throw new Error("extract 需要 fields:[{ name, selector, attr?, multiple?, fields? }]");
+    throw new Error("extract 需要 fields:[{ name, selector, attr?, multiple?, fields? }] 或 action: \"suggest\" 推断字段");
   }
   for (const f of fields) {
     if (typeof f?.name !== "string" || f.name === "" || typeof f?.selector !== "string" || f.selector === "") {
@@ -2760,9 +2866,19 @@ export async function replayTool(
   }
   if (steps.length === 0) throw new Error("步骤为空");
   const failFast = args.failFast !== false;
+  // F2 retryFailed:失败步骤自动重试次数(0-10;500ms×n 线性退避,重试耗尽才停)。
+  const retryFailed = Math.min(Math.max(Math.floor(Number(args.retryFailed ?? 0)) || 0, 0), 10);
+  // retryOf:面板一键重跑传入,标记本运行重跑自哪次 run(仅记录用)。
+  const retryOf = typeof args.retryOf === "string" && args.retryOf !== "" ? args.retryOf : undefined;
+  const runMeta = {
+    ...(retryFailed > 0 || retryOf !== undefined
+      ? { ...(retryFailed > 0 ? { retries: { attempted: 0, recovered: 0 } } : {}), ...(retryOf !== undefined ? { retryOf } : {}) }
+      : {}),
+  };
   const opts: ReplayOptions = {
     healing: config?.selectorHealing !== false,
     healTimeoutMs: config?.healTimeoutMs ?? 3000,
+    ...(retryFailed > 0 ? { retryFailed } : {}),
   };
 
   // 数据集模式:data 数组或 dataFile(CSV,首行为变量名),逐行运行。
@@ -2786,14 +2902,14 @@ export async function replayTool(
       const t0 = Date.now();
       if (missing.length > 0) {
         runs.push({ row: i, total: steps.length, passed: 0, failed: steps.length, healedCount: 0, results: [], error: `缺少变量: ${missing.join(", ")}` });
-        noteRun({ kind: "replay", source, total: steps.length, passed: 0, failed: steps.length, healedCount: 0, durationMs: Date.now() - t0, row: i, results: [] });
+        noteRun({ kind: "replay", source, total: steps.length, passed: 0, failed: steps.length, healedCount: 0, durationMs: Date.now() - t0, row: i, results: [], ...runMeta });
         continue;
       }
       const result = await runReplay(substituteVars(steps, rowVars), impls, failFast, opts);
       const stoppedAt = (result as { stoppedAt?: number }).stoppedAt;
       runs.push({ row: i, ...result });
       if (result.failed === 0) okRows++;
-      noteRun({ kind: "replay", source, total: result.total, passed: result.passed, failed: result.failed, healedCount: result.healedCount, durationMs: Date.now() - t0, row: i, results: result.results });
+      noteRun({ kind: "replay", source, total: result.total, passed: result.passed, failed: result.failed, healedCount: result.healedCount, durationMs: Date.now() - t0, row: i, results: result.results, ...(result.retries ?? runMeta.retries), ...runMeta.retryOf !== undefined ? { retryOf: runMeta.retryOf } : {} });
       void stoppedAt;
     }
     return {
@@ -2815,10 +2931,58 @@ export async function replayTool(
   const t0 = Date.now();
   const result = await runReplay(substituteVars(steps, vars), impls, failFast, opts);
   const stoppedAt = (result as { stoppedAt?: number }).stoppedAt;
-  noteRun({ kind: "replay", source, total: result.total, passed: result.passed, failed: result.failed, healedCount: result.healedCount, durationMs: Date.now() - t0, results: result.results });
+  const retries = (result as { retries?: { attempted: number; recovered: number } }).retries;
+  noteRun({
+    kind: "replay", source, total: result.total, passed: result.passed, failed: result.failed, healedCount: result.healedCount,
+    durationMs: Date.now() - t0, results: result.results,
+    ...(retries !== undefined ? { retries } : {}),
+    ...(retryOf !== undefined ? { retryOf } : {}),
+  });
   return {
     source,
     ...result,
-    summary: `${result.passed}/${result.total} 通过${result.failed > 0 ? `, ${result.failed} 失败${stoppedAt !== undefined ? `(停在步骤 ${stoppedAt})` : ""}` : ""}${result.healedCount > 0 ? `,${result.healedCount} 步自愈(建议修复录制选择器)` : ""}`,
+    summary: `${result.passed}/${result.total} 通过${result.failed > 0 ? `, ${result.failed} 失败${stoppedAt !== undefined ? `(停在步骤 ${stoppedAt})` : ""}` : ""}${result.healedCount > 0 ? `,${result.healedCount} 步自愈(建议修复录制选择器)` : ""}${retries !== undefined && retries.recovered > 0 ? `,重试挽回 ${retries.recovered}/${retries.attempted}` : ""}`,
   };
+}
+
+// ---------------------------------------------------------------------------
+// F2 面板一键重跑:web 进程 POST /runs/rerun → 注入的 handler(与 stepImpls
+// 同路径调 replayTool);handler 由 registerTools 注册(tools 服务所在进程)。
+// agent 忙碌 = 有 live 工具调用在途 或 重跑自身在途 → 端点回 409,面板置灰。
+// ---------------------------------------------------------------------------
+
+/** 重跑请求:source 为已保存录制名,retryOf 为被重跑的原 runId(记录用)。 */
+export interface RerunRequest { source: string; retryOf?: string }
+
+type RerunHandler = (req: RerunRequest) => Promise<unknown>;
+
+let rerunHandler: RerunHandler | null = null;
+let rerunInFlight = false;
+
+/** registerTools 注册重跑入口(stepImpls 同路径);web-only 进程保持 null。 */
+export function setRerunHandler(fn: RerunHandler): void {
+  rerunHandler = fn;
+}
+
+/** 当前可用的重跑入口(null = 本进程没有 tools 服务,无法重跑)。 */
+export function getRerunHandler(): RerunHandler | null {
+  return rerunHandler;
+}
+
+/** 重跑是否正在执行(端点互斥;导出供测试)。 */
+export function rerunBusy(): boolean {
+  return rerunInFlight;
+}
+
+/** 执行一次面板重跑(busy 检查 + 互斥标记;返回 replayTool 结果)。 */
+export async function runPanelRerun(req: RerunRequest): Promise<unknown> {
+  if (rerunInFlight) throw Object.assign(new Error("重跑进行中"), { status: 409 });
+  rerunInFlight = true;
+  try {
+    const handler = rerunHandler;
+    if (handler === null) throw Object.assign(new Error("本进程无回放能力(tools 服务未注册)"), { status: 503 });
+    return await handler(req);
+  } finally {
+    rerunInFlight = false;
+  }
 }

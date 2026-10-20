@@ -129,6 +129,8 @@ interface LatestRun {
   failed: number
   healedCount: number
   row?: number
+  retries?: { attempted: number; recovered: number }
+  retryOf?: string
 }
 
 /* ------------------------------------------------------------------ */
@@ -252,6 +254,8 @@ function BrowserFloatingOverlay() {
   const [history, setHistory] = useState<NavHistoryItem[]>([])
   const [shotVersion, setShotVersion] = useState(Date.now())
   const [lastRun, setLastRun] = useState<LatestRun | null>(null)
+  const [agentBusy, setAgentBusy] = useState(false)
+  const [rerunMsg, setRerunMsg] = useState('')
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null)
   const [reportOpen, setReportOpen] = useState(false)
 
@@ -290,9 +294,10 @@ function BrowserFloatingOverlay() {
 
       fetch(`${base}/runs/latest`, { cache: 'no-store' })
         .then((r) => (r.ok ? r.json() : null))
-        .then((d: { run?: LatestRun | null } | null) => {
+        .then((d: { run?: LatestRun | null; busy?: boolean } | null) => {
           if (!alive) return
           setLastRun(d?.run ?? null)
+          setAgentBusy(d?.busy === true)
         })
         .catch(() => {})
     }
@@ -304,6 +309,34 @@ function BrowserFloatingOverlay() {
       clearInterval(timer)
     }
   }, [base])
+
+  // F2 一键重跑:POST /runs/rerun(agent 忙碌时端点回 409,按钮依据 busy 置灰)。
+  const rerunLast = () => {
+    const run = lastRun
+    if (!run || agentBusy) return
+    const source = run.source.replace(/\(已从磁盘重载\)$/, '')
+    if (!source || ['steps', 'recording', 'recent-log'].includes(source)) {
+      setRerunMsg('该来源不是已保存录制,无法一键重跑')
+      return
+    }
+    setRerunMsg('重跑中…')
+    setAgentBusy(true)
+    fetch(`${base}/runs/rerun`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ source, retryOf: run.runId }),
+    })
+      .then(async (r) => {
+        const d: { error?: string } | null = await r.json().catch(() => null)
+        if (!r.ok) throw new Error(d?.error ?? `HTTP ${r.status}`)
+        return d
+      })
+      .then(() => setRerunMsg('重跑完成,报告稍后刷新'))
+      .catch((e: unknown) => {
+        setAgentBusy(false)
+        setRerunMsg(e instanceof Error ? e.message : String(e))
+      })
+  }
 
   // Poll pending confirmation (browser_confirm) at 1s for responsive approval.
   // 退避:宿主半落后于 client 半(如 DSH 启动早于插件升级,无 /confirm 路由)时,
@@ -721,7 +754,34 @@ function BrowserFloatingOverlay() {
             createElement(
               'span',
               { style: { overflow: 'hidden', textOverflow: 'ellipsis' } },
-              `${lastRun.source}${lastRun.row !== undefined ? ` 行${lastRun.row}` : ''} ${lastRun.passed}/${lastRun.total}${lastRun.healedCount > 0 ? ` · 自愈${lastRun.healedCount}` : ''} · ${new Date(lastRun.ts).toLocaleTimeString('zh-CN', { hour12: false })}`,
+              `${lastRun.source}${lastRun.row !== undefined ? ` 行${lastRun.row}` : ''} ${lastRun.passed}/${lastRun.total}${lastRun.healedCount > 0 ? ` · 自愈${lastRun.healedCount}` : ''}${lastRun.retries !== undefined && lastRun.retries.recovered > 0 ? ` · 重试挽回${lastRun.retries.recovered}` : ''} · ${new Date(lastRun.ts).toLocaleTimeString('zh-CN', { hour12: false })}`,
+            ),
+            rerunMsg !== '' &&
+              createElement('span', { style: { flex: 'none', color: p.tertiary, fontSize: '11px' } }, rerunMsg),
+            createElement(
+              'button',
+              {
+                type: 'button',
+                title: agentBusy ? 'agent 忙碌,稍后可重跑' : `重跑 ${lastRun.source}(结果进运行历史,标 retryOf)`,
+                disabled: agentBusy,
+                onClick: (e: MouseEvent) => {
+                  e.stopPropagation()
+                  rerunLast()
+                },
+                style: {
+                  flex: 'none',
+                  height: '20px',
+                  padding: '0 8px',
+                  border: `1px solid ${p.border}`,
+                  borderRadius: '6px',
+                  background: 'transparent',
+                  color: agentBusy ? p.tertiary : p.secondary,
+                  fontSize: '11px',
+                  cursor: agentBusy ? 'not-allowed' : 'pointer',
+                  opacity: agentBusy ? 0.5 : 1,
+                },
+              },
+              agentBusy ? '重跑(忙碌)' : '↻ 重跑',
             ),
           ),
       ),
@@ -929,6 +989,28 @@ function BrowserFloatingOverlay() {
               },
               `回归报告${lastRun !== null ? ` — ${lastRun.source}` : ''}(运行趋势 / 失败明细 / 自愈清单)`,
             ),
+            lastRun !== null &&
+              createElement(
+                'button',
+                {
+                  type: 'button',
+                  disabled: agentBusy,
+                  title: agentBusy ? 'agent 忙碌,稍后可重跑' : '重跑最近一次运行',
+                  onClick: () => rerunLast(),
+                  style: {
+                    height: '28px',
+                    padding: '0 10px',
+                    border: `1px solid ${p.border}`,
+                    borderRadius: '6px',
+                    background: 'transparent',
+                    color: agentBusy ? p.tertiary : p.secondary,
+                    fontSize: '12px',
+                    cursor: agentBusy ? 'not-allowed' : 'pointer',
+                    opacity: agentBusy ? 0.5 : 1,
+                  },
+                },
+                agentBusy ? '↻ 重跑(忙碌)' : '↻ 重跑',
+              ),
             createElement(
               'button',
               {

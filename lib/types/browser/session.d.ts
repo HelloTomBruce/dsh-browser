@@ -16,13 +16,37 @@ export declare function pageRef(page: Page, ref: string): RefEntry | undefined;
 export declare function clearPageRefs(page: Page): void;
 /** 取页面当前完整 ref 表(browser_find 增量续号合并用;无则空 Map)。 */
 export declare function pageRefsOf(page: Page): Map<string, RefEntry>;
-export interface SnapshotCache {
+/** 一个历史版本的快照内容(text/aria 两种模式共用同一条版本序列)。 */
+export interface SnapshotEntry {
     version: number;
     text: string;
     aria: string;
 }
+/**
+ * F3 增量快照历史:per-page 环形数组保存最近 K 个版本(K = snapshotHistory,
+ * 默认 5,上限 20;text 模式 ≤20KB/版本 → 内存上界 ≈100KB/page)。
+ * 任意 since ∈ [latest-K+1, latest] 都能 diff;更旧版本回落全量标 stale。
+ */
+export interface SnapshotCache {
+    /** 最新版本号(单调递增,不因环形淘汰回退)。 */
+    version: number;
+    /** 最近 K 个版本,按 version 升序;长度 ≤ K。 */
+    history: SnapshotEntry[];
+}
 export declare function snapshotCacheOf(page: Page): SnapshotCache | undefined;
 export declare function setSnapshotCache(page: Page, cache: SnapshotCache): void;
+/** 环形容量钳制(1..20,非法值回落默认 5)。导出供测试。 */
+export declare function snapshotCapacity(k: unknown): number;
+/**
+ * 追加一个新版本并淘汰超限的最旧版本(纯逻辑,导出供测试)。
+ * cache 为 undefined 时从 version 1 开始;返回新缓存(不修改入参)。
+ */
+export declare function pushSnapshotVersion(cache: SnapshotCache | undefined, content: {
+    text: string;
+    aria: string;
+}, capacity: unknown): SnapshotCache;
+/** 按版本号取历史条目;不在环形窗口内(更旧/未知)返回 undefined。 */
+export declare function snapshotVersionEntry(cache: SnapshotCache | undefined, version: number): SnapshotEntry | undefined;
 /** 已保存的录制脚本:name → 步骤数组。 */
 export declare const savedRecordings: Map<string, {
     steps: ReplayStep[];
@@ -74,6 +98,12 @@ export declare function clearPendingConfirm(): void;
 /** 面板提交审批决策;id 不匹配(已被新审批取代/超时清理)时返回 false。 */
 export declare function resolveConfirm(id: string, decision: "allowed" | "denied"): boolean;
 export declare function clearTestLog(): void;
+/** live 工具调用开始(register 包装层调用)。 */
+export declare function noteToolStart(): void;
+/** live 工具调用结束(成功/失败都算结束)。 */
+export declare function noteToolEnd(): void;
+/** 当前在途的 live 工具调用数(0 = agent 空闲)。 */
+export declare function activeToolCalls(): number;
 /** window 上的回传 binding 名(须为合法 JS 标识符)。 */
 export declare const HUMAN_BINDING = "__dshBrowserHumanEvent";
 /** agent 即将/刚刚执行了 DOM 操作(register 包装层调用);1.5s 内的页内事件视为工具回声。 */
@@ -97,8 +127,10 @@ export declare function humanEventToStep(payload: unknown): {
  * 页内注入的人工操作监听(addInitScript 序列化;每次导航自动重装)。
  * 监听常驻但 node 侧只在录制中生效,关闭录制等价于"移除"。
  * 只上报可交互元素上的 click 与表单控件的 change,避免逐键噪音。
+ * F5 收敛:cssPath 等元素描述来自 walker.ts 单一来源(构建期拼装注入),
+ * 不再持有内联副本;payload 字段语义与 v0.3 完全一致。
  */
-export declare function installHumanRecorder(): void;
+export declare const installHumanRecorder: (payload: unknown) => void;
 /** 网络请求/响应记录。 */
 export interface NetworkEntry {
     url: string;

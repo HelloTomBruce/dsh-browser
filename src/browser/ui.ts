@@ -6,8 +6,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ReefContext, WebRoute } from "../lib/types.js";
 import type { BrowserConfig } from "./types.js";
-import { activePage, historyOf, currentProfile, testLogOf, currentPause, getPendingConfirm, resolveConfirm } from "./session.js";
-import { statusTool } from "./tools.js";
+import { activePage, historyOf, currentProfile, testLogOf, currentPause, getPendingConfirm, resolveConfirm, activeToolCalls } from "./session.js";
+import { statusTool, runPanelRerun, getRerunHandler, rerunBusy } from "./tools.js";
 import { listRecordings, recordingDetail, deleteRecording } from "./recordings.js";
 import { latestRun, listRuns, renderHtmlReport } from "./reports.js";
 import { urlPath, sendText, sendJson, readJsonBody } from "../lib/http.js";
@@ -59,8 +59,43 @@ export function registerBrowserApi(ctx: ReefContext, config: BrowserConfig, base
           return;
         }
         if (path === `${base}/runs/latest`) {
-          // 最近一次回归运行(replay/batch),供面板「最近回归」行展示。
-          sendJson(res, 200, { run: latestRun() });
+          // 最近一次回归运行(replay/batch),供面板「最近回归」行展示;
+          // busy = agent 有工具调用在途或重跑在执行(面板据此置灰重跑按钮)。
+          sendJson(res, 200, { run: latestRun(), busy: activeToolCalls() > 0 || rerunBusy() });
+          return;
+        }
+        if (path === `${base}/runs/rerun`) {
+          // F2 面板一键重跑:body { source, retryOf? }。与 browser_replay 同路径
+          // (replayTool + stepImpls,含 auto 审批闸);agent 忙碌 409(面板置灰依据)。
+          if ((req.method ?? "GET") !== "POST") {
+            sendText(res, 405, "POST only");
+            return;
+          }
+          if (activeToolCalls() > 0 || rerunBusy()) {
+            sendJson(res, 409, { error: "agent 忙碌(有工具调用或回放在进行),稍后重试" });
+            return;
+          }
+          if (getRerunHandler() === null) {
+            sendJson(res, 503, { error: "本进程无回放能力(tools 服务未注册)" });
+            return;
+          }
+          const body = (await readJsonBody(req).catch(() => undefined)) as
+            | { source?: unknown; retryOf?: unknown }
+            | undefined;
+          const source = typeof body?.source === "string" ? body.source.trim() : "";
+          if (!source) {
+            sendJson(res, 400, "source required");
+            return;
+          }
+          try {
+            const result = await runPanelRerun({
+              source,
+              ...(typeof body?.retryOf === "string" && body.retryOf !== "" ? { retryOf: body.retryOf } : {}),
+            });
+            sendJson(res, 200, { ok: true, result });
+          } catch (e) {
+            sendJson(res, 500, { error: e instanceof Error ? e.message : String(e) });
+          }
           return;
         }
         if (path === `${base}/runs/report`) {

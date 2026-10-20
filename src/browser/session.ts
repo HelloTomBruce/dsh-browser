@@ -3,6 +3,7 @@ import { readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser, BrowserContext, Page, Request } from "playwright-core";
 import type { BrowserConfig, ProfileState, DownloadEntry, FormField, NavEntry, RefEntry, ReplayStep, SelectorHint } from "./types.js";
+import { injectWalker } from "./walker.js";
 
 /** 当前活动 profile 名(默认 "default")。 */
 export let currentProfile = "default";
@@ -48,10 +49,23 @@ export function pageRefsOf(page: Page): Map<string, RefEntry> {
 // since 命中且内容未变 → unchanged;变了 → 行级 diff 只返回变化区域。
 // ---------------------------------------------------------------------------
 
-export interface SnapshotCache {
+/** 一个历史版本的快照内容(text/aria 两种模式共用同一条版本序列)。 */
+export interface SnapshotEntry {
   version: number;
   text: string;
   aria: string;
+}
+
+/**
+ * F3 增量快照历史:per-page 环形数组保存最近 K 个版本(K = snapshotHistory,
+ * 默认 5,上限 20;text 模式 ≤20KB/版本 → 内存上界 ≈100KB/page)。
+ * 任意 since ∈ [latest-K+1, latest] 都能 diff;更旧版本回落全量标 stale。
+ */
+export interface SnapshotCache {
+  /** 最新版本号(单调递增,不因环形淘汰回退)。 */
+  version: number;
+  /** 最近 K 个版本,按 version 升序;长度 ≤ K。 */
+  history: SnapshotEntry[];
 }
 
 const snapshotCaches = new WeakMap<Page, SnapshotCache>();
@@ -62,6 +76,37 @@ export function snapshotCacheOf(page: Page): SnapshotCache | undefined {
 
 export function setSnapshotCache(page: Page, cache: SnapshotCache): void {
   snapshotCaches.set(page, cache);
+}
+
+/** 环形容量钳制(1..20,非法值回落默认 5)。导出供测试。 */
+export function snapshotCapacity(k: unknown): number {
+  const n = Math.floor(Number(k));
+  if (!Number.isFinite(n)) return 5;
+  return Math.min(Math.max(n, 1), 20);
+}
+
+/**
+ * 追加一个新版本并淘汰超限的最旧版本(纯逻辑,导出供测试)。
+ * cache 为 undefined 时从 version 1 开始;返回新缓存(不修改入参)。
+ */
+export function pushSnapshotVersion(
+  cache: SnapshotCache | undefined,
+  content: { text: string; aria: string },
+  capacity: unknown,
+): SnapshotCache {
+  const version = (cache?.version ?? 0) + 1;
+  const k = snapshotCapacity(capacity);
+  const history = [...(cache?.history ?? []), { version, text: content.text, aria: content.aria }];
+  if (history.length > k) history.splice(0, history.length - k);
+  return { version, history };
+}
+
+/** 按版本号取历史条目;不在环形窗口内(更旧/未知)返回 undefined。 */
+export function snapshotVersionEntry(cache: SnapshotCache | undefined, version: number): SnapshotEntry | undefined {
+  if (cache === undefined) return undefined;
+  return cache.history[cache.history.length - 1]?.version === version
+    ? cache.history[cache.history.length - 1]
+    : cache.history.find((e) => e.version === version);
 }
 
 /** 已保存的录制脚本:name → 步骤数组。 */
@@ -178,6 +223,25 @@ export function clearTestLog(): void {
   testLog.length = 0;
 }
 
+// F2 面板一键重跑的忙碌判定:agent 会话有 live 浏览器工具调用在途时,
+// POST /runs/rerun 回 409(面板据此置灰重跑按钮)。
+let toolInFlight = 0;
+
+/** live 工具调用开始(register 包装层调用)。 */
+export function noteToolStart(): void {
+  toolInFlight++;
+}
+
+/** live 工具调用结束(成功/失败都算结束)。 */
+export function noteToolEnd(): void {
+  if (toolInFlight > 0) toolInFlight--;
+}
+
+/** 当前在途的 live 工具调用数(0 = agent 空闲)。 */
+export function activeToolCalls(): number {
+  return toolInFlight;
+}
+
 // ---------------------------------------------------------------------------
 // 人工操作进录制轨迹(human-in-the-loop 混合录制):
 // 页内监听 click/change → exposeBinding 回传 → 映射为 browser_click/type/select
@@ -259,35 +323,17 @@ function handleHumanEvent(payload: unknown): void {
  * 页内注入的人工操作监听(addInitScript 序列化;每次导航自动重装)。
  * 监听常驻但 node 侧只在录制中生效,关闭录制等价于"移除"。
  * 只上报可交互元素上的 click 与表单控件的 change,避免逐键噪音。
+ * F5 收敛:cssPath 等元素描述来自 walker.ts 单一来源(构建期拼装注入),
+ * 不再持有内联副本;payload 字段语义与 v0.3 完全一致。
  */
-export function installHumanRecorder(): void {
-  const w = window as unknown as Record<string, unknown>;
-  if (w.__dshHumanRecorder === true) return;
-  w.__dshHumanRecorder = true;
+export const installHumanRecorder = injectWalker<unknown, void>((_payload, w) => {
+  const cssPath = w.cssPath;
+  const w2 = window as unknown as Record<string, unknown>;
+  if (w2.__dshHumanRecorder === true) return;
+  w2.__dshHumanRecorder = true;
   const BINDING = "__dshBrowserHumanEvent";
   const INTERACTIVE =
     "a,button,input,select,textarea,summary,[role='button'],[role='tab'],[role='menuitem'],[role='option'],[role='switch'],[role='checkbox']";
-
-  function cssPath(el: Element): string {
-    if (el.id) return `#${CSS.escape(el.id)}`;
-    const testid = el.getAttribute("data-testid") ?? el.getAttribute("data-test-id");
-    if (testid) return `[data-testid="${testid.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`;
-    const parts: string[] = [];
-    let cur: Element | null = el;
-    while (cur && cur !== document.body && parts.length < 6) {
-      const tag = cur.tagName.toLowerCase();
-      const parent: Element | null = cur.parentElement;
-      if (!parent) {
-        parts.unshift(tag);
-        break;
-      }
-      const sameTag = Array.from(parent.children).filter((c) => c.tagName === cur!.tagName);
-      const idx = sameTag.indexOf(cur) + 1;
-      parts.unshift(sameTag.length > 1 ? `${tag}:nth-of-type(${idx})` : tag);
-      cur = parent;
-    }
-    return parts.join(" > ");
-  }
 
   function payloadOf(el: Element, kind: string, value?: string): Record<string, unknown> {
     const aria = el.getAttribute("aria-label");
@@ -306,7 +352,7 @@ export function installHumanRecorder(): void {
 
   function send(payload: Record<string, unknown>): void {
     try {
-      const fn = w[BINDING] as ((p: unknown) => unknown) | undefined;
+      const fn = w2[BINDING] as ((p: unknown) => unknown) | undefined;
       if (typeof fn === "function") void Promise.resolve(fn(payload)).catch(() => {});
     } catch {
       /* binding 未就绪(导航瞬间)忽略 */
@@ -340,7 +386,7 @@ export function installHumanRecorder(): void {
     },
     true,
   );
-}
+});
 
 /** 网络请求/响应记录。 */
 export interface NetworkEntry {

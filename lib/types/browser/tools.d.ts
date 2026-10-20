@@ -490,6 +490,33 @@ export declare function confirmTool(config: BrowserConfig, args: Record<string, 
     waitedMs: number;
     detail: string;
 }>;
+/** auto 模式默认敏感文本模式(提交/删除/支付类)。 */
+export declare const DEFAULT_SENSITIVE_PATTERNS: string[];
+/** auto 模式默认参与判定的工具(已决:只拦 browser_click,type 误报率高)。 */
+export declare const DEFAULT_SENSITIVE_TOOLS: string[];
+/** 敏感判定的元素描述(与 walker describeElement 字段子集对应)。 */
+export interface SensitiveDesc {
+    role: string;
+    name: string;
+    text: string;
+    id: string;
+    testid: string;
+    tag: string;
+}
+/**
+ * 纯逻辑:元素描述命中了哪些敏感模式(role/name/text/id/testid/tag 拼接后
+ * 子串匹配,大小写不敏感;空白模式忽略)。返回命中的模式列表(空 = 放行)。
+ * 导出供测试。
+ */
+export declare function sensitiveHits(desc: SensitiveDesc | null, patterns: string[]): string[];
+/**
+ * auto 模式审批闸:命中敏感模式时经 confirmTool 弹审批等待用户决策,
+ * 拒绝/超时抛错(调用方该步失败),允许则返回继续执行原工具。
+ * 不满足前置条件(非 auto / 工具不在 sensitiveTools / 无模式 / 无活动页 /
+ * 无目标 selector / 页内取描述失败)一律直接放行,由原工具自行处理错误。
+ * page 参数仅供测试注入;缺省取当前活动页。
+ */
+export declare function confirmGate(config: BrowserConfig, tool: string, args: Record<string, any>, page?: Page | null): Promise<void>;
 /** 断言:条件在 timeoutMs 内成立则通过,否则失败并自动截图存证据。visual 断言走像素比对。 */
 export declare function assertTool(config: BrowserConfig, args: Record<string, any>, exec?: ToolRunContext): Promise<{
     url: string;
@@ -553,6 +580,11 @@ export declare const SELECTOR_STEP_TOOLS: Set<string>;
 /**
  * 采集选择器指向元素的指纹(页内 evaluate;找不到元素返回 null)。
  * 指纹是回放自愈的降级候选来源:testid / role+name / text / id / tag+text。
+ * F5 收敛:元素描述(role/name/text)改用 walker 单一来源
+ * (describeElement),与 aria 快照/find/录制回声共用同一套语义;相比旧
+ * 内联副本,role 推断更完整(slider/spinbutton/searchbox/heading 等),
+ * name 补齐 labelledby/label[for]/title 兜底 —— 指纹只作自愈降级候选,
+ * 语义增强只会让自愈命中率更高,不改变任何主链路行为。
  */
 export declare function captureSelectorHint(page: Page, selector: string): Promise<SelectorHint | null>;
 /** 由指纹生成自愈降级候选(按优先级排序;导出供测试)。 */
@@ -609,10 +641,12 @@ export declare function recordTool(args: Record<string, any>): Promise<{
     steps?: undefined;
     recordings?: undefined;
 }>;
-/** 回放选项(自愈开关与单次尝试超时,来自 config)。 */
+/** 回放选项(自愈开关与单次尝试超时,来自 config;retryFailed 为自动重试次数)。 */
 export interface ReplayOptions {
     healing?: boolean;
     healTimeoutMs?: number;
+    /** F2:步骤失败(含自愈链耗尽)后自动重试的次数,步骤间 500ms×n 线性退避。 */
+    retryFailed?: number;
 }
 /** 回放执行器(步骤 → 工具调用),由 register.ts 注入实现 map。支持选择器自愈。 */
 export declare function runReplay(steps: ReplayStep[], impls: Record<string, (args: any) => Promise<unknown>>, failFast: boolean, opts?: ReplayOptions): Promise<{
@@ -620,6 +654,10 @@ export declare function runReplay(steps: ReplayStep[], impls: Record<string, (ar
     passed: number;
     failed: number;
     healedCount: number;
+    retries?: {
+        attempted: number;
+        recovered: number;
+    };
     stoppedAt?: number;
     results: any[];
 }>;
@@ -641,7 +679,73 @@ export declare function workspaceFilePath(cwd: string, file: string): string;
  * 规则化抽取:fields 定义抽取结构,next 选择器驱动翻页(maxPages 上限),
  * 行数超 maxRows 截断;format/file 控制序列化与落盘(json/csv/jsonl/markdown)。
  */
+/** suggest 采集的表格单元格信息(页内采集,纯函数消费)。 */
+export interface SuggestCell {
+    text: string;
+    href?: string;
+    src?: string;
+}
+/** suggest 页内分析结果(自包含 injectWalker 注入采集)。 */
+export interface SuggestAnalysis {
+    ok: boolean;
+    /** table: 表格行模式;list: 重复卡片/列表项模式。 */
+    kind?: "table" | "list";
+    /** 行/卡片选择器(抽取 fields 顶层的 multiple selector)。 */
+    rowSelector?: string;
+    headerTexts?: string[];
+    cells?: SuggestCell[];
+    item?: SuggestCell;
+    reason?: string;
+    overview?: {
+        links: number;
+        images: number;
+        buttons: number;
+        headings: number;
+        rows: number;
+        textChars: number;
+    };
+}
+/** 字段名净化:空白→下划线,限长 30,空回落 col_N。导出供测试。 */
+export declare function suggestFieldName(header: string | undefined, index: number): string;
+/**
+ * 纯逻辑:由表头与首行单元格特征推断表格 fields(单元格文本/链接 href/图片 src)。
+ * 返回可直接放进 rows.fields 的嵌套字段数组。导出供测试。
+ */
+export declare function fieldsFromCells(headerTexts: string[], cells: SuggestCell[]): ExtractField[];
+/**
+ * 纯逻辑:由首条卡片信息推断列表 fields(项文本/链接/图片)。
+ * 文本取第一个子元素(项自身无法用 querySelector 自选)。导出供测试。
+ */
+export declare function fieldsFromCard(item: SuggestCell): ExtractField[];
+/** 纯逻辑:由 fields 与单元格样本拼出首行样例(与抽取输出同构;按 td 序号对位)。导出供测试。 */
+export declare function sampleOfFields(fields: ExtractField[], cells: SuggestCell[]): Record<string, unknown>;
+/**
+ * suggest 汇总(纯逻辑):由页内分析结果组装「可直接交给抽取模式」的顶层 fields
+ * (单个 multiple rows 字段 + 行内嵌套字段)与样本。推断失败原样返回。导出供测试。
+ */
+export declare function suggestWrap(analysis: SuggestAnalysis): {
+    suggested: boolean;
+    kind?: "table" | "list";
+    rowSelector?: string;
+    headerTexts?: string[];
+    fields?: ExtractField[];
+    sample?: Record<string, unknown>;
+    reason?: string;
+    overview?: SuggestAnalysis["overview"];
+};
 export declare function extractTool(config: BrowserConfig, args: Record<string, any>, exec?: ToolRunContext): Promise<{
+    url: string;
+    title: string;
+    suggested: boolean;
+    kind?: "table" | "list";
+    rowSelector?: string;
+    headerTexts?: string[];
+    fields?: ExtractField[];
+    sample?: Record<string, unknown>;
+    reason?: string;
+    overview?: SuggestAnalysis["overview"];
+    action: string;
+} | {
     url: string;
     title: string;
     file?: string | undefined;
@@ -697,6 +801,10 @@ export declare function batchTool(args: Record<string, any>, impls: Record<strin
     passed: number;
     failed: number;
     healedCount: number;
+    retries?: {
+        attempted: number;
+        recovered: number;
+    };
     stoppedAt?: number;
     results: any[];
 }>;
@@ -724,6 +832,10 @@ export declare function replayTool(args: Record<string, any>, impls: Record<stri
     passed: number;
     failed: number;
     healedCount: number;
+    retries?: {
+        attempted: number;
+        recovered: number;
+    };
     stoppedAt?: number;
     results: any[];
     source: string;
@@ -732,4 +844,19 @@ export declare function replayTool(args: Record<string, any>, impls: Record<stri
     failedRows?: undefined;
     runs?: undefined;
 }>;
+/** 重跑请求:source 为已保存录制名,retryOf 为被重跑的原 runId(记录用)。 */
+export interface RerunRequest {
+    source: string;
+    retryOf?: string;
+}
+type RerunHandler = (req: RerunRequest) => Promise<unknown>;
+/** registerTools 注册重跑入口(stepImpls 同路径);web-only 进程保持 null。 */
+export declare function setRerunHandler(fn: RerunHandler): void;
+/** 当前可用的重跑入口(null = 本进程没有 tools 服务,无法重跑)。 */
+export declare function getRerunHandler(): RerunHandler | null;
+/** 重跑是否正在执行(端点互斥;导出供测试)。 */
+export declare function rerunBusy(): boolean;
+/** 执行一次面板重跑(busy 检查 + 互斥标记;返回 replayTool 结果)。 */
+export declare function runPanelRerun(req: RerunRequest): Promise<unknown>;
+export {};
 //# sourceMappingURL=tools.d.ts.map

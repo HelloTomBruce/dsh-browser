@@ -34,12 +34,34 @@ export interface BrowserConfig {
   /** browser_extract 单次最多聚合的行数(默认 1000)。 */
   maxRows?: number;
   /**
-   * 敏感操作审批模式:off(默认,行为与 v0.2 一致,工具仍可手动调用)|
-   * manual(systemPrompt 指示 agent 在提交/删除/支付类动作前调用 browser_confirm)。
+   * 增量快照保留的历史版本数 K(默认 5,上限 20;内存上界 ≈100KB/page)。
+   * since ∈ [latest-K+1, latest] 都能 diff,更旧版本回落全量标 stale。
    */
-  confirmMode?: "off" | "manual";
+  snapshotHistory?: number;
+  /**
+   * 敏感操作审批模式:off(默认,行为与 v0.2 一致,工具仍可手动调用)|
+   * manual(systemPrompt 指示 agent 在提交/删除/支付类动作前调用 browser_confirm)|
+   * auto(硬约束:宿主层在 sensitiveTools 工具执行前强制解析目标元素并与
+   * sensitivePatterns 匹配,命中即弹审批卡,拒绝/超时该步失败,agent 无法绕过)。
+   */
+  confirmMode?: "off" | "manual" | "auto";
   /** browser_confirm 等待人工决策的默认超时毫秒(默认 60000)。 */
   confirmTimeoutMs?: number;
+  /**
+   * auto 模式敏感文本模式:对目标元素的 role/name/text/id/testid/tag 做
+   * 子串匹配(大小写不敏感),命中任一即拦。默认 提交/删除/支付。
+   */
+  sensitivePatterns?: string[];
+  /**
+   * auto 模式参与判定的工具(默认只拦 browser_click —— type 误报率高,
+   * 需要拦输入类动作时显式加入)。
+   */
+  sensitiveTools?: string[];
+  /**
+   * replay/batch 是否同样走 auto 审批闸(默认 true)。设为 false 表示回放
+   * 不再弹审批 —— 数据驱动/定时回归的逃生口,风险自担(见 README)。
+   */
+  confirmInReplay?: boolean;
   /**
    * 工具集:all(默认,全部工具)| core(只注册高频核心集,低频的
    * 录制/回放/报告/抽取/profile 等不注册,降 systemPrompt 常驻 token)。

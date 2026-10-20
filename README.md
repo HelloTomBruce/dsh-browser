@@ -4,9 +4,9 @@ DSH 插件:共享 Playwright 浏览器自动化 + 原生界面实时画面面板
 
 | 模块 | 做什么 |
 | --- | --- |
-| 🧭 **浏览器自动化** | 共享 Playwright 浏览器:多标签、多 profile、隔离 context、下载/上传、Cookie、表单回放,36 个 `browser_*` 工具 |
-| 🖥️ **实时画面** | 注入 DSH 界面右下角悬浮面板:浏览器状态 + 实时缩略图,点开大屏模态框(2 秒轮询画面 + 访问历史);**双向协作**——agent 等待人工操作/敏感审批时显示交互横幅、执行点击/输入前目标元素琥珀色高亮预告,「最近回归」行点击直接内嵌查看 HTML 回归报告 |
-| ✅ **回归测试闭环** | 录制回放 + 选择器自愈 + 参数化/数据驱动 + 视觉回归 + 运行历史与报告导出 |
+| 🧭 **浏览器自动化** | 共享 Playwright 浏览器:多标签、多 profile、隔离 context、下载/上传、Cookie、表单回放、增量快照(历史版本环形缓存,窗口内任意 since 可 diff)、抽取字段自动建议(action:suggest),36 个 `browser_*` 工具 |
+| 🖥️ **实时画面** | 注入 DSH 界面右下角悬浮面板:浏览器状态 + 实时缩略图,点开大屏模态框(2 秒轮询画面 + 访问历史);**双向协作**——agent 等待人工操作/敏感审批时显示交互横幅、执行点击/输入前目标元素琥珀色高亮预告(confirmMode:auto 时敏感动作由宿主层强制拦截弹审批,agent 无法绕过),「最近回归」行与报告模态可一键重跑(agent 忙碌自动置灰) |
+| ✅ **回归测试闭环** | 录制回放 + 选择器自愈 + 参数化/数据驱动 + 失败自动重试(`retryFailed`)+ 视觉回归 + 运行历史/报告导出 + 面板一键重跑(`/runs/rerun`,agent 忙碌置灰) |
 
 设计原则:能做的一次性操作交给 agent 用 bash 完成,插件只做 bash 做不到的常驻浏览器自动化。唯一第三方运行时依赖是 `playwright-core`(复用系统已装的 Edge/Chrome,无需下载 Chromium),不依赖任何 `@deepseek-ai` 运行时包。
 
@@ -44,8 +44,12 @@ dsh plugin --profile web add dsh-browser-view
         healTimeoutMs: 3000       # 自愈时单次尝试的超时
         maxRefs: 200              # ARIA 快照每次分配的 ref 上限
         maxRows: 1000             # browser_extract 单次聚合行数上限
-        confirmMode: off          # off | manual(manual 时 systemPrompt 要求敏感动作前先 browser_confirm)
+        snapshotHistory: 5        # 增量快照保留的历史版本数 K(1-20;since 命中窗口内任意版本都能 diff)
+        confirmMode: off          # off | manual | auto(auto: 宿主层在敏感动作前强制弹审批,agent 无法绕过)
         confirmTimeoutMs: 60000   # browser_confirm 等待人工决策的默认超时
+        sensitivePatterns: [提交, 删除, 支付]  # auto 模式敏感文本模式(子串匹配 role/name/text/id/testid/tag)
+        sensitiveTools: [browser_click]        # auto 模式参与判定的工具(默认只拦 click;type 误报率高,需拦时显式加入)
+        confirmInReplay: true     # replay/batch 是否同样走 auto 审批闸(false = 回放不弹审批,风险自担)
         toolset: all              # all(默认全量 36 个)| core(高频核心集 24 个,降 systemPrompt 常驻 token)
 ```
 
@@ -72,9 +76,9 @@ dsh plugin --profile web add dsh-browser-view
 | `browser_wait_for` | 通用显式等待(元素状态 / URL / 文本 / 数量 / eval,超时抛错) |
 | `browser_assert` | 结构化断言(失败自动截图存证据目录并报错);`visual: { baseline }` 做视觉回归断言(见下) |
 | `browser_network` | 接口记录查询:list / failed(4xx/5xx)/ wait(命中返回 waitMs,超时附最近请求摘要)/ stats(按 host 聚合计数/失败数/均耗时/状态码分布)/ clear,含请求/响应体(截断) |
-| `browser_extract` | 规则化结构化抽取:fields 定义 CSS 字段(支持嵌套/multiple),`next` 自动翻页聚合,导出 json / csv / jsonl / markdown 落盘工作区 |
+| `browser_extract` | 规则化结构化抽取:fields 定义 CSS 字段(支持嵌套/multiple),`next` 自动翻页聚合,导出 json / csv / jsonl / markdown 落盘工作区;`action: "suggest"` 自动推断字段(表格首行/列表卡片 → 单元格文本/链接 href/图片 src),返回建议 fields + 首行样本,微调后直接交给抽取模式(往返 3-4 次降到 2 次);推断不出规律结构返回原因与容器概览,不猜 |
 | `browser_record` | 操作录制:start / stop / save(list/delete 管理;save 支持 `stripReads` 剔除只读步骤、`vars` 把指定步骤字段抽成 `{{占位符}}`;selector 步骤自动附带元素指纹供回放自愈;**录制期间用户在浏览器中的手动输入/点击/选择也会进录制**,标记 `source: "human"`) |
-| `browser_replay` | 回放录制或步骤序列(回归测试,遇错可停);`vars` 注入占位符,`data` / `dataFile`(CSV)逐行数据驱动;选择器失效自动按指纹自愈 |
+| `browser_replay` | 回放录制或步骤序列(回归测试,遇错可停);`vars` 注入占位符,`data` / `dataFile`(CSV)逐行数据驱动;选择器失效自动按指纹自愈;`retryFailed: N` 失败步骤自动重试 N 次(500ms×n 退避,重试耗尽才停),返回 `retries: { attempted, recovered }` |
 | `browser_report` | 回归报告:list / show / export(运行历史自动记录,export 聚合为 Markdown / 自包含 HTML 落盘) |
 | `browser_status` / `browser_close` | 状态 / 关闭会话 |
 | `browser_doctor` | 健康诊断(不启动浏览器):可执行文件/channel、playwright-core、userDataDir 与截图/下载/基线目录写权限、工作区基准目录解析来源、会话状态、面板 API 可达性;失败项附修复建议。环境异常(文件落错位置/浏览器起不来)先跑它定位 |
@@ -256,6 +260,15 @@ browser_confirm({
 - **fail-closed**:等待超时按拒绝处理,绝不默认放行;
 - 配置 `confirmMode: manual` 后,systemPrompt 会要求 agent 在提交/删除/支付类动作前必须先调用本工具(默认 `off`,不改变既有行为,工具仍可随时手动调用);
 - 回放含 browser_confirm 步骤时同样弹卡等人,人机混合回归的安全闸。
+
+### 失败自动重跑 + 面板一键重跑
+
+- **`browser_replay { retryFailed: N }`**:整轮回放中失败(自愈链耗尽)的步骤自动重试 N 次(0-10,步骤间 500ms×n 线性退避);failFast 语义保持——重试耗尽才停;偶发超时/网络抖动导致的失败在重试中挽回时,结果行标 `recovered: true`,返回值与运行历史(reports/runs.jsonl)记 `retries: { attempted, recovered }`。
+- **面板一键重跑**:实时画面面板「最近回归」行与内嵌报告模态均有「↻ 重跑」按钮,POST `/browser/runs/rerun { source, retryOf }` 走与 `browser_replay` 完全相同的路径(`stepImpls` + auto 审批闸);**agent 忙碌(有工具调用或回放在途)时端点回 409,按钮置灰**;重跑产生的运行在历史中标 `retryOf: <原 runId>`,报告可见重试挽回次数。纯 web 进程(无 tools 服务)回 503。
+
+### 自动拦截(confirmMode: auto,硬约束)
+
+`manual` 依赖 agent 自觉,`auto` 把信任边界收回到宿主层:配置后,`sensitiveTools`(默认只拦 `browser_click`)执行前,宿主层自动解析目标 selector/ref → 页内取元素统一描述(role/name/text/id/testid/tag)→ 与 `sensitivePatterns`(默认 `提交/删除/支付`)子串匹配(大小写不敏感);**命中即复用上面的审批管线弹卡等人,拒绝/超时该步直接失败,agent 无法绕过**;未命中(翻页、展开下拉等)直接放行,每次判定只多一次页内 evaluate,无感知延迟。live 调用与 replay/batch 默认同样拦截;定时/数据驱动回归可设 `confirmInReplay: false` 关掉回放侧审批——⚠️ 这意味着无人值守的回放可以不经审批执行提交/删除/支付类动作,仅在受控环境使用,风险自担。
 
 ## 实时画面面板
 

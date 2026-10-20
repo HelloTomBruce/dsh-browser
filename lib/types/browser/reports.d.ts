@@ -21,6 +21,13 @@ export interface RunRecord {
     durationMs: number;
     /** data 数据集模式时的行号(单次运行为 undefined)。 */
     row?: number;
+    /** retryFailed 自动重试统计(F2:attempted 总尝试次数,recovered 经重试挽回的步骤数)。 */
+    retries?: {
+        attempted: number;
+        recovered: number;
+    };
+    /** 面板一键重跑产生的运行所引用的原 runId(F2)。 */
+    retryOf?: string;
     results: RunStepResult[];
 }
 /** 报告存储目录($DSH_HOME/.dsh-browser/reports)。 */

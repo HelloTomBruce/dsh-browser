@@ -31,6 +31,10 @@ export interface RunRecord {
   durationMs: number;
   /** data 数据集模式时的行号(单次运行为 undefined)。 */
   row?: number;
+  /** retryFailed 自动重试统计(F2:attempted 总尝试次数,recovered 经重试挽回的步骤数)。 */
+  retries?: { attempted: number; recovered: number };
+  /** 面板一键重跑产生的运行所引用的原 runId(F2)。 */
+  retryOf?: string;
   results: RunStepResult[];
 }
 
@@ -168,7 +172,7 @@ export function renderMarkdownReport(runs: RunRecord[], source?: string): string
   ];
   for (const r of runs) {
     lines.push(
-      `| ${fmtTs(r.ts)} | ${r.source}${r.row !== undefined ? ` (行${r.row})` : ""} | ${r.passed}/${r.total} | ${r.failed} | ${r.healedCount} | ${(r.durationMs / 1000).toFixed(1)}s |`,
+      `| ${fmtTs(r.ts)} | ${r.source}${r.row !== undefined ? ` (行${r.row})` : ""}${r.retries !== undefined ? ` (重试挽回 ${r.retries.recovered}/${r.retries.attempted})` : ""}${r.retryOf !== undefined ? ` ↻${r.retryOf}` : ""} | ${r.passed}/${r.total} | ${r.failed} | ${r.healedCount} | ${(r.durationMs / 1000).toFixed(1)}s |`,
     );
   }
   const { failures, healed } = analyze(runs);
@@ -198,7 +202,7 @@ export function renderHtmlReport(runs: RunRecord[], source?: string): string {
   const rowHtml = runs
     .map((r) => {
       const ok = r.failed === 0;
-      return `<tr><td>${esc(fmtTs(r.ts))}</td><td>${esc(r.source)}${r.row !== undefined ? ` (行${r.row})` : ""}</td><td class="${ok ? "ok" : "bad"}">${r.passed}/${r.total}</td><td>${r.failed}</td><td>${r.healedCount}</td><td>${(r.durationMs / 1000).toFixed(1)}s</td></tr>`;
+      return `<tr><td>${esc(fmtTs(r.ts))}</td><td>${esc(r.source)}${r.row !== undefined ? ` (行${r.row})` : ""}${r.retries !== undefined ? ` <span class="meta">(重试挽回 ${r.retries.recovered}/${r.retries.attempted})</span>` : ""}${r.retryOf !== undefined ? ` <span class="meta" title="重跑自 ${esc(r.retryOf)}">↻</span>` : ""}</td><td class="${ok ? "ok" : "bad"}">${r.passed}/${r.total}</td><td>${r.failed}</td><td>${r.healedCount}</td><td>${(r.durationMs / 1000).toFixed(1)}s</td></tr>`;
     })
     .join("\n");
   const failRows =
