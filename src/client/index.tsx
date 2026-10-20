@@ -94,6 +94,7 @@ interface BrowserStatus {
   url?: string
   title?: string
   channel?: string
+  pause?: { instruction: string; startedAt: number } | null
 }
 
 interface BrowserOp {
@@ -108,6 +109,25 @@ interface NavHistoryItem {
   url: string
   title?: string
   ts: number
+}
+
+interface PendingConfirm {
+  id: string
+  reason: string
+  tool?: string
+  args?: Record<string, unknown>
+  startedAt: number
+  decision?: 'allowed' | 'denied'
+}
+
+interface PickResult {
+  selector: string
+  tag: string
+  id?: string
+  testid?: string
+  role?: string
+  name?: string
+  url?: string
 }
 
 interface LatestRun {
@@ -242,6 +262,10 @@ function BrowserFloatingOverlay() {
   const [history, setHistory] = useState<NavHistoryItem[]>([])
   const [shotVersion, setShotVersion] = useState(Date.now())
   const [lastRun, setLastRun] = useState<LatestRun | null>(null)
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null)
+  const [reportOpen, setReportOpen] = useState(false)
+  const [pickActive, setPickActive] = useState(false)
+  const [pickResult, setPickResult] = useState<PickResult | null>(null)
 
   // Discover the node-half base path
   useEffect(() => {
@@ -292,6 +316,71 @@ function BrowserFloatingOverlay() {
       clearInterval(timer)
     }
   }, [base])
+
+  // Poll pending confirmation (browser_confirm) at 1s for responsive approval
+  useEffect(() => {
+    let alive = true
+    const poll = () => {
+      fetch(`${base}/confirm`, { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d: { confirm?: PendingConfirm | null } | null) => {
+          if (!alive) return
+          setPendingConfirm(d?.confirm ?? null)
+        })
+        .catch(() => {})
+    }
+    poll()
+    const timer = setInterval(poll, 1000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [base])
+
+  const submitConfirmDecision = (decision: 'allowed' | 'denied') => {
+    const id = pendingConfirm?.id
+    if (!id) return
+    setPendingConfirm(null)
+    fetch(`${base}/confirm`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id, decision }),
+    }).catch(() => {})
+  }
+
+  // Element picking: start one-shot click capture, poll result (500ms, max 60s)
+  const startPick = () => {
+    if (pickActive) return
+    setPickResult(null)
+    setPickActive(true)
+    fetch(`${base}/pick`, { method: 'POST' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .catch(() => {})
+    const deadline = Date.now() + 60_000
+    const timer = setInterval(() => {
+      if (Date.now() > deadline) {
+        clearInterval(timer)
+        setPickActive(false)
+        return
+      }
+      fetch(`${base}/pick`, { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d: { pick?: PickResult | null } | null) => {
+          if (d?.pick) {
+            clearInterval(timer)
+            setPickActive(false)
+            setPickResult(d.pick)
+          }
+        })
+        .catch(() => {})
+    }, 500)
+  }
+
+  const copyPickSelector = () => {
+    const sel = pickResult?.selector
+    if (!sel) return
+    navigator.clipboard?.writeText(sel).catch(() => {})
+  }
 
   // Poll navigation history when modal is open
   useEffect(() => {
@@ -438,6 +527,107 @@ function BrowserFloatingOverlay() {
                 : '未打开',
           ),
         ),
+        // Sensitive-Action Approval Banner (browser_confirm pending)
+        pendingConfirm
+          ? createElement(
+              'div',
+              {
+                style: {
+                  padding: '6px 8px',
+                  borderRadius: '8px',
+                  border: '1px solid #ef4444',
+                  background: dark ? 'rgba(239, 68, 68, 0.12)' : 'rgba(239, 68, 68, 0.07)',
+                  color: dark ? '#fca5a5' : '#b91c1c',
+                  fontSize: '12px',
+                  lineHeight: '1.5',
+                },
+                title: 'Agent 请求执行敏感操作,请审批',
+              },
+              createElement(
+                'div',
+                { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+                createElement('span', { style: { flex: 'none' } }, '⚠'),
+                createElement(
+                  'span',
+                  { style: { flex: 1, minWidth: 0, wordBreak: 'break-all', fontWeight: 600 } },
+                  '敏感操作待审批',
+                ),
+              ),
+              createElement(
+                'div',
+                { style: { marginTop: '4px', wordBreak: 'break-all' } },
+                pendingConfirm.reason,
+                pendingConfirm.tool ? ` (${pendingConfirm.tool})` : '',
+              ),
+              createElement(
+                'div',
+                { style: { display: 'flex', gap: '8px', marginTop: '6px' } },
+                createElement(
+                  'button',
+                  {
+                    onClick: () => submitConfirmDecision('allowed'),
+                    style: {
+                      flex: 1,
+                      padding: '4px 0',
+                      borderRadius: '6px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      background: '#16a34a',
+                      color: '#fff',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                    },
+                  },
+                  '允许',
+                ),
+                createElement(
+                  'button',
+                  {
+                    onClick: () => submitConfirmDecision('denied'),
+                    style: {
+                      flex: 1,
+                      padding: '4px 0',
+                      borderRadius: '6px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      background: '#dc2626',
+                      color: '#fff',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                    },
+                  },
+                  '拒绝',
+                ),
+              ),
+            )
+          : null,
+        // Human-Takeover Pause Banner (browser_pause_for_human waiting)
+        status?.pause
+          ? createElement(
+              'div',
+              {
+                style: {
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '6px 8px',
+                  borderRadius: '8px',
+                  border: '1px solid #f59e0b',
+                  background: dark ? 'rgba(245, 158, 11, 0.12)' : 'rgba(245, 158, 11, 0.08)',
+                  color: dark ? '#fbbf24' : '#b45309',
+                  fontSize: '12px',
+                  lineHeight: '1.5',
+                },
+                title: 'Agent 正在等待人工操作,请在浏览器窗口中完成',
+              },
+              createElement('span', { style: { flex: 'none' } }, '⏸'),
+              createElement(
+                'span',
+                { style: { flex: 1, minWidth: 0, wordBreak: 'break-all' } },
+                `等待人工操作: ${status.pause.instruction}`,
+              ),
+            )
+          : null,
         // Live Screenshot Thumbnail
         status?.open
           ? createElement('img', {
@@ -527,7 +717,7 @@ function BrowserFloatingOverlay() {
               ),
             ),
           ),
-        // 最近回归运行(replay/batch)
+        // 最近回归运行(replay/batch)—— 点击在面板内查看 HTML 报告
         lastRun !== null &&
           createElement(
             'div',
@@ -544,8 +734,10 @@ function BrowserFloatingOverlay() {
                 whiteSpace: 'nowrap',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
+                cursor: 'pointer',
               },
-              title: `runId=${lastRun.runId} · browser_report 可导出报告`,
+              title: `runId=${lastRun.runId} · 点击查看报告`,
+              onClick: () => setReportOpen(true),
             },
             createElement('span', { style: { flex: 'none', color: p.tertiary, fontSize: '11px' } }, '最近回归'),
             createElement(
@@ -622,6 +814,26 @@ function BrowserFloatingOverlay() {
               },
               status?.open ? `${status.title || ''} (${status.url || ''})` : '浏览器实时大屏',
             ),
+            // Element Pick Button (one-shot click capture → selector)
+            createElement(
+              'button',
+              {
+                type: 'button',
+                title: pickActive ? '拾取中:在浏览器窗口点击任意元素' : '点选元素生成 selector',
+                onClick: startPick,
+                style: {
+                  flex: 'none',
+                  padding: '2px 10px',
+                  border: `1px solid ${pickActive ? '#f59e0b' : p.border}`,
+                  borderRadius: '6px',
+                  background: pickActive ? 'rgba(245, 158, 11, 0.12)' : 'transparent',
+                  color: pickActive ? '#f59e0b' : p.secondary,
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                },
+              },
+              pickActive ? '◎ 拾取中…' : '🎯 点选元素',
+            ),
             createElement(
               'button',
               {
@@ -644,6 +856,56 @@ function BrowserFloatingOverlay() {
               '✕',
             ),
           ),
+          // Picked Element Result Bar (selector + copy)
+          pickResult !== null &&
+            createElement(
+              'div',
+              {
+                style: {
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '6px 8px',
+                  borderRadius: '8px',
+                  border: '1px solid #10b981',
+                  background: dark ? 'rgba(16, 185, 129, 0.1)' : 'rgba(16, 185, 129, 0.06)',
+                  fontSize: '12px',
+                },
+              },
+              createElement(
+                'div',
+                { style: { flex: 1, minWidth: 0 } },
+                createElement(
+                  'div',
+                  { style: { color: p.primary, fontFamily: 'monospace', wordBreak: 'break-all' } },
+                  pickResult.selector,
+                ),
+                createElement(
+                  'div',
+                  { style: { color: p.tertiary, marginTop: '2px' } },
+                  `${pickResult.tag}${pickResult.role ? ` · role=${pickResult.role}` : ''}${pickResult.name ? ` · "${pickResult.name}"` : ''} — 可作为 browser_click/type/select 的 selector 告诉 agent`,
+                ),
+              ),
+              createElement(
+                'button',
+                {
+                  type: 'button',
+                  onClick: copyPickSelector,
+                  style: {
+                    flex: 'none',
+                    padding: '4px 10px',
+                    border: 'none',
+                    borderRadius: '6px',
+                    background: '#10b981',
+                    color: '#fff',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                  },
+                },
+                '复制 selector',
+              ),
+            ),
           // Large Screenshot
           status?.open
             ? createElement('img', {
@@ -717,6 +979,88 @@ function BrowserFloatingOverlay() {
                 ),
               ),
             ),
+        ),
+      ),
+    // Regression Report Modal (embedded HTML report via iframe)
+    reportOpen &&
+      createElement(
+        'div',
+        {
+          onClick: (e: MouseEvent) => {
+            if (e.target === e.currentTarget) setReportOpen(false)
+          },
+          style: {
+            position: 'fixed',
+            inset: 0,
+            zIndex: 2147483002,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '24px',
+            background: 'rgba(0, 0, 0, 0.65)',
+            pointerEvents: 'auto',
+          },
+        },
+        createElement(
+          'div',
+          {
+            style: {
+              width: 'min(1000px, 94vw)',
+              height: '90vh',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '10px',
+              border: `1px solid ${p.border}`,
+              borderRadius: '12px',
+              background: dark ? '#181e29' : '#ffffff',
+              padding: '16px',
+              boxShadow: '0 16px 64px rgba(0, 0, 0, 0.4)',
+            },
+          },
+          createElement(
+            'div',
+            { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+            createElement(
+              'span',
+              {
+                style: {
+                  flex: 1,
+                  color: p.primary,
+                  fontSize: '14px',
+                  fontWeight: 600,
+                },
+              },
+              `回归报告${lastRun !== null ? ` — ${lastRun.source}` : ''}(运行趋势 / 失败明细 / 自愈清单)`,
+            ),
+            createElement(
+              'button',
+              {
+                type: 'button',
+                onClick: () => setReportOpen(false),
+                style: {
+                  width: '28px',
+                  height: '28px',
+                  border: `1px solid ${p.border}`,
+                  borderRadius: '6px',
+                  background: 'transparent',
+                  color: p.secondary,
+                  cursor: 'pointer',
+                },
+              },
+              '✕',
+            ),
+          ),
+          createElement('iframe', {
+            src: `${base}/runs/report`,
+            title: '回归报告',
+            style: {
+              flex: 1,
+              width: '100%',
+              border: `1px solid ${p.border}`,
+              borderRadius: '8px',
+              background: '#fff',
+            },
+          }),
         ),
       ),
   )

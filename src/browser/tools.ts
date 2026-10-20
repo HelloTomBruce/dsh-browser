@@ -1,5 +1,5 @@
 // dsh-browser · 浏览器 — 工具实现(browser_* 函数)
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, unlinkSync, accessSync, constants as fsConstants } from "node:fs";
 import { dirname, join, resolve, isAbsolute } from "node:path";
 import type { Locator, Page } from "playwright-core";
 import type { ToolRunContext } from "../lib/types.js";
@@ -11,6 +11,10 @@ import {
   noteScreenshotDir, cleanupScreenshots,
   networkEntries, clearNetwork, savedRecordings, startRecording, stopRecording, lastRecordingOf,
   testLogOf, clearTestLog, isRecording, setPageRefs, pageRef, type TestCall,
+  setPauseInstruction, clearPauseInstruction,
+  setPendingConfirm, getPendingConfirm, clearPendingConfirm,
+  pageRefsOf, loadPlaywright, namedContextsOf, registerTabPage, attachPage,
+  snapshotCacheOf, setSnapshotCache,
 } from "./session.js";
 import { saveRecordingFile, listRecordings, deleteRecording, safeName as sanitizeName } from "./recordings.js";
 import { serializeRows, formatFromFile, parseCsv } from "./extract.js";
@@ -88,10 +92,11 @@ export function compressText(text: string): string {
  * 可交互元素分配 ref=e1..eN 并附稳定 CSS 路径;无语义容器(div/span)穿透。
  * 输出形如 `- button "登录" [ref=e3]` 的缩进树,供纯文本模型定位操作目标。
  */
-function buildAriaTree(maxRefs: number): {
+function buildAriaTree(payload: { maxRefs: number; scope: string }): {
   tree: string;
   refs: { ref: string; role: string; name: string; selector: string }[];
   truncated: boolean;
+  scopeMissing: boolean;
 } {
   const INTERACTIVE = new Set([
     "link", "button", "textbox", "checkbox", "radio", "combobox", "listbox",
@@ -211,7 +216,7 @@ function buildAriaTree(maxRefs: number): {
     if (INTERACTIVE.has(role)) {
       if (!isVisible(el)) return;
       const name = nameOf(el, role);
-      const ref = refs.length < maxRefs ? `e${refs.length + 1}` : "";
+      const ref = refs.length < payload.maxRefs ? `e${refs.length + 1}` : "";
       if (ref !== "") refs.push({ ref, role, name, selector: cssPath(el) });
       const expanded = el.getAttribute("aria-expanded");
       const disabled =
@@ -237,52 +242,377 @@ function buildAriaTree(maxRefs: number): {
     }
   }
 
-  if (document.body) walk(document.body, 0);
-  return { tree: lines.join("\n"), refs, truncated };
+  if (document.body === null) return { tree: "", refs, truncated: false, scopeMissing: false };
+  const root = payload.scope ? document.querySelector(payload.scope) : document.body;
+  if (root === null) return { tree: "", refs, truncated: false, scopeMissing: true };
+  walk(root, 0);
+  return { tree: lines.join("\n"), refs, truncated, scopeMissing: false };
+}
+
+/**
+ * 页内语义查找:只收集匹配 query 的可交互元素(不构建全量树)。
+ * role/name/cssPath/isVisible 与 buildAriaTree 保持同一套语义(此处内联副本,
+ * evaluate 序列化不允许闭包引用);改动任一处时同步另一处。
+ */
+function findInteractive(payload: { query: string; exact: boolean; scope: string; limit: number }): {
+  matches: { role: string; name: string; selector: string; ancestors: string[] }[];
+  candidates: { role: string; name: string }[];
+  scanned: number;
+} {
+  const INTERACTIVE = new Set([
+    "link", "button", "textbox", "checkbox", "radio", "combobox", "listbox",
+    "searchbox", "slider", "spinbutton", "switch", "tab", "menuitem", "option", "treeitem",
+  ]);
+  const STRUCTURAL = new Set([
+    "navigation", "main", "banner", "contentinfo", "form", "search", "complementary",
+    "region", "dialog", "alert", "table", "list", "heading", "toolbar", "menu", "menubar",
+    "tablist", "tree", "grid",
+  ]);
+  const SKIP_TAGS = new Set(["script", "style", "template", "noscript", "svg", "path", "link", "meta", "br"]);
+
+  function roleOf(el: Element): string {
+    const explicit = el.getAttribute("role");
+    if (explicit) return explicit.trim().split(/\s+/)[0] ?? "";
+    const tag = el.tagName.toLowerCase();
+    switch (tag) {
+      case "a": return el.hasAttribute("href") ? "link" : "";
+      case "button": return "button";
+      case "input": {
+        const t = (el.getAttribute("type") ?? "text").toLowerCase();
+        if (t === "checkbox") return "checkbox";
+        if (t === "radio") return "radio";
+        if (t === "range") return "slider";
+        if (t === "number") return "spinbutton";
+        if (t === "search") return "searchbox";
+        if (["button", "submit", "reset", "image"].includes(t)) return "button";
+        if (["hidden", "file"].includes(t)) return "";
+        return "textbox";
+      }
+      case "textarea": return "textbox";
+      case "select": return "combobox";
+      case "summary": return "button";
+      default: return "";
+    }
+  }
+
+  function nameOf(el: Element, role: string): string {
+    const aria = el.getAttribute("aria-label");
+    if (aria && aria.trim()) return aria.trim().slice(0, 60);
+    const labelledby = el.getAttribute("aria-labelledby");
+    if (labelledby) {
+      const t = labelledby
+        .split(/\s+/)
+        .map((id) => document.getElementById(id)?.textContent?.trim() ?? "")
+        .join(" ")
+        .trim();
+      if (t) return t.slice(0, 60);
+    }
+    if (el.id) {
+      const lab = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      const t = lab?.textContent?.trim();
+      if (t) return t.slice(0, 60);
+    }
+    if (["textbox", "searchbox", "combobox", "spinbutton"].includes(role)) {
+      const ph = el.getAttribute("placeholder");
+      if (ph && ph.trim()) return ph.trim().slice(0, 60);
+    }
+    const text = ((el as HTMLElement).innerText || el.textContent || "").trim().replace(/\s+/g, " ");
+    if (text) return text.slice(0, 60);
+    const title = el.getAttribute("title");
+    if (title && title.trim()) return title.trim().slice(0, 60);
+    return "";
+  }
+
+  function cssPath(el: Element): string {
+    if (el.id) return `#${CSS.escape(el.id)}`;
+    const testid = el.getAttribute("data-testid") ?? el.getAttribute("data-test-id");
+    if (testid) return `[data-testid="${testid.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`;
+    const parts: string[] = [];
+    let cur: Element | null = el;
+    while (cur && cur !== document.body && parts.length < 6) {
+      const tag = cur.tagName.toLowerCase();
+      const parent: Element | null = cur.parentElement;
+      if (!parent) {
+        parts.unshift(tag);
+        break;
+      }
+      const sameTag = Array.from(parent.children).filter((c) => c.tagName === cur!.tagName);
+      const idx = sameTag.indexOf(cur) + 1;
+      parts.unshift(sameTag.length > 1 ? `${tag}:nth-of-type(${idx})` : tag);
+      cur = parent;
+    }
+    return parts.join(" > ");
+  }
+
+  function isVisible(el: Element): boolean {
+    if (el.getAttribute("aria-hidden") === "true") return false;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return false;
+    const style = getComputedStyle(el);
+    return style.visibility !== "hidden" && style.display !== "none";
+  }
+
+  /** 最近的结构化祖先(区域上下文,帮助区分多命中)。 */
+  function ancestorsOf(el: Element): string[] {
+    const out: string[] = [];
+    let cur: Element | null = el.parentElement;
+    while (cur && cur !== document.body && out.length < 3) {
+      const role = roleOf(cur);
+      if (STRUCTURAL.has(role)) {
+        const name = nameOf(cur, role);
+        out.push(name !== "" ? `${role} "${name.replace(/"/g, "'")}"` : role);
+      }
+      cur = cur.parentElement;
+    }
+    return out;
+  }
+
+  const q = payload.query.trim().toLowerCase();
+  const matches: { role: string; name: string; selector: string; ancestors: string[] }[] = [];
+  const candidates: { role: string; name: string }[] = [];
+  let scanned = 0;
+  const root = payload.scope ? document.querySelector(payload.scope) : document.body;
+  if (root === null) return { matches: [], candidates, scanned: 0 };
+
+  const stack: Element[] = [root];
+  while (stack.length > 0) {
+    const el = stack.pop()!;
+    const role = roleOf(el);
+    if (INTERACTIVE.has(role)) {
+      if (!isVisible(el)) continue;
+      const name = nameOf(el, role);
+      const idOrTestid = el.id || el.getAttribute("data-testid") || "";
+      let hit = false;
+      if (name !== "") {
+        const n = name.toLowerCase();
+        hit = payload.exact ? n === q : n.includes(q);
+      }
+      if (!hit && idOrTestid !== "" && idOrTestid.toLowerCase() === q) hit = true;
+      scanned += 1;
+      if (name !== "" && candidates.length < 50) candidates.push({ role, name });
+      if (hit && matches.length < payload.limit) {
+        matches.push({ role, name, selector: cssPath(el), ancestors: ancestorsOf(el) });
+      }
+      continue; // 可交互元素不深入
+    }
+    for (const c of Array.from(el.children)) {
+      if (!SKIP_TAGS.has(c.tagName.toLowerCase())) stack.push(c);
+    }
+  }
+  return { matches, candidates, scanned };
+}
+
+/** 最长公共子串长度(小写比较;零依赖,导出供测试)。 */
+export function lcsScore(a: string, b: string): number {
+  const x = a.toLowerCase();
+  const y = b.toLowerCase();
+  if (x === "" || y === "") return 0;
+  let best = 0;
+  const prev = new Array<number>(y.length + 1).fill(0);
+  for (let i = 1; i <= x.length; i++) {
+    let diag = 0;
+    for (let j = 1; j <= y.length; j++) {
+      const tmp = prev[j];
+      prev[j] = x[i - 1] === y[j - 1] ? diag + 1 : 0;
+      if (prev[j] > best) best = prev[j];
+      diag = tmp;
+    }
+  }
+  return best;
+}
+
+/** 零命中时按相似度挑 top5 候选(导出供测试)。 */
+export function topSuggestions(
+  query: string,
+  candidates: { role: string; name: string }[],
+  count = 5,
+): { role: string; name: string; score: number }[] {
+  // 阈值:短 query(≤3 字符)要求公共子串 ≥1,长 query 要求 ≥2 —— 宁可多给候选
+  // 供 agent 二次定位,也不空手而归;完全无公共子串的一律不给(噪音)。
+  const min = query.trim().length <= 3 ? 1 : 2;
+  return candidates
+    .map((c) => ({ ...c, score: lcsScore(query, c.name) }))
+    .filter((c) => c.score >= min)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, count)
+    .map(({ role, name, score }) => ({ role, name, score }));
+}
+
+/**
+ * 为命中元素增量分配 ref:沿用既有注册表的编号继续(不与上次快照冲突),
+ * 合并写回;返回带 ref 的命中列表(上限 maxRefs,超出标 truncated)。
+ * 导出供测试(纯逻辑,不依赖浏览器)。
+ */
+export function assignRefs(
+  existing: Map<string, RefEntry>,
+  matches: { role: string; name: string; selector: string; ancestors: string[] }[],
+  maxRefs: number,
+): { withRefs: { ref: string; role: string; name: string; selector: string; ancestors: string[] }[]; merged: Map<string, RefEntry>; truncated: boolean } {
+  let next = 0;
+  for (const key of existing.keys()) {
+    const n = Number(key.replace(/^e/, ""));
+    if (Number.isFinite(n) && n > next) next = n;
+  }
+  const merged = new Map(existing);
+  const withRefs: { ref: string; role: string; name: string; selector: string; ancestors: string[] }[] = [];
+  let truncated = false;
+  for (const m of matches) {
+    if (merged.size >= maxRefs) {
+      truncated = true;
+      break;
+    }
+    next += 1;
+    const ref = `e${next}`;
+    merged.set(ref, { role: m.role, name: m.name, selector: m.selector });
+    withRefs.push({ ref, ...m });
+  }
+  return { withRefs, merged, truncated };
+}
+
+/**
+ * 语义元素定位:按名称(或 id/data-testid)在可交互元素中查找,只返回命中的
+ * ref + 区域上下文,不输出全量 aria 树 —— 大页面定位单个目标时 token 开销
+ * 远小于 browser_snapshot { mode: "aria" }。返回的 ref 可直接用于
+ * click/type/select/press。零命中不抛错,附最相近候选供二次定位。
+ */
+export async function findTool(config: BrowserConfig, args: Record<string, any>) {
+  const query = typeof args.query === "string" ? args.query.trim() : "";
+  if (!query) {
+    throw new Error("缺少 query: 要找的元素名称(如「提交」「登录」,或 id/data-testid)");
+  }
+  const page = await getPage(config);
+  const maxRefs = Math.min(Math.max(Number(args.maxRefs ?? config.maxRefs ?? 200) || 200, 1), 500);
+  const data = await page.evaluate(findInteractive, {
+    query,
+    exact: args.exact === true,
+    scope: typeof args.scope === "string" && args.scope ? args.scope : "",
+    limit: 20,
+  });
+  const { withRefs, merged, truncated } = assignRefs(pageRefsOf(page), data.matches, maxRefs);
+  setPageRefs(page, merged); // 合并(非整表替换):既有 ref 继续有效
+  const suggestions = withRefs.length === 0 ? topSuggestions(query, data.candidates) : [];
+  return {
+    found: withRefs.length,
+    matches: withRefs.slice(0, 10).map(({ ref, role, name, ancestors }) => ({ ref, role, name, ancestors })),
+    ...(suggestions.length > 0 ? { suggestions } : {}),
+    ...(truncated ? { truncated } : {}),
+    scanned: data.scanned,
+    url: page.url(),
+    title: await page.title(),
+  };
+}
+
+/**
+ * 行级 diff:掐掉公共前缀/后缀,返回变化区。导出供测试。
+ * 全等返回 { unchanged: true };否则 changedFrom 为新文本中变化区首行(1 起)。
+ */
+export function diffLines(oldText: string, newText: string): {
+  unchanged: boolean;
+  changedFrom?: number;
+  lines?: string[];
+  removed?: number;
+} {
+  const a = oldText === "" ? [] : oldText.split("\n");
+  const b = newText === "" ? [] : newText.split("\n");
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i += 1;
+  if (i === a.length && i === b.length) return { unchanged: true };
+  let j = 0;
+  while (j < a.length - i && j < b.length - i && a[a.length - 1 - j] === b[b.length - 1 - j]) j += 1;
+  return {
+    unchanged: false,
+    changedFrom: i + 1,
+    lines: b.slice(i, b.length - j),
+    removed: a.length - i - j,
+  };
 }
 
 export async function snapshotTool(config: BrowserConfig, args: Record<string, any>) {
   const page = await getPage(config);
   const maxText = args.maxTextChars ?? config.maxTextChars;
-  // ARIA 模式:可访问性树 + ref 引用,定位操作用(读正文仍用默认 text 模式)。
-  if (args.mode === "aria") {
+  const scope = typeof args.scope === "string" && args.scope ? args.scope : "";
+  const since = args.since !== undefined ? Number(args.since) : undefined;
+  const ariaMode = args.mode === "aria";
+  const identity = { url: page.url(), title: await page.title() };
+
+  // 增量模式:since 命中缓存版本 → 内容未变返回 unchanged;变了只返回变化区。
+  const cache = snapshotCacheOf(page);
+  const canDiff = since !== undefined && cache !== undefined && cache.version === since;
+
+  let content: string; // 本次的规范化文本(text 模式压缩后 / aria 模式树)
+  let extra: Record<string, unknown> = {};
+  let walkerTruncated = false;
+  if (ariaMode) {
     const maxRefs = Math.min(Math.max(Number(args.maxRefs ?? config.maxRefs ?? 200) || 200, 1), 500);
-    const data = await page.evaluate(buildAriaTree, maxRefs);
+    const data = await page.evaluate(buildAriaTree, { maxRefs, scope });
+    if (data.scopeMissing) throw new Error(`scope 未命中: 页面中没有匹配 "${scope}" 的元素`);
     const map = new Map<string, RefEntry>(
       data.refs.map((r) => [r.ref, { role: r.role, name: r.name, selector: r.selector }]),
     );
     setPageRefs(page, map); // 整表替换,旧 ref 即刻失效
+    content = data.tree;
+    walkerTruncated = data.truncated;
+    extra = { refs: data.refs.length };
+  } else {
+    const maxLinks = args.maxLinks ?? config.maxLinks;
+    const data = await page.evaluate(
+      (payload: { maxL: number; sc: string }) => {
+        const root = payload.sc ? document.querySelector(payload.sc) : document.body;
+        const text = root instanceof HTMLElement ? root.innerText : "";
+        const scopeEl = root ?? document;
+        const links = Array.from(scopeEl.querySelectorAll("a"))
+          .slice(0, payload.maxL)
+          .map((a) => ({
+            text: (a.innerText || a.textContent || "").trim().slice(0, 200),
+            href: a.href,
+          }));
+        const inputs = scopeEl.querySelectorAll("input, textarea, select").length;
+        const scopeMissing = payload.sc !== "" && root === null;
+        return { text, links, inputs, scopeMissing };
+      },
+      { maxL: maxLinks, sc: scope },
+    );
+    if (data.scopeMissing) throw new Error(`scope 未命中: 页面中没有匹配 "${scope}" 的元素`);
+    content = compressText(data.text);
+    extra = { links: data.links, inputs: data.inputs };
+  }
+
+  const key = ariaMode ? "aria" : "text";
+  if (canDiff && cache![key] === content) {
+    return { unchanged: true, contentVersion: cache!.version, ...(scope !== "" ? { scope } : {}), ...identity, ...extra };
+  }
+  if (canDiff) {
+    const d = diffLines(cache![key], content);
+    setSnapshotCache(page, { version: cache!.version + 1, text: ariaMode ? cache!.text : content, aria: ariaMode ? content : cache!.aria });
+    if (d.unchanged) {
+      return { unchanged: true, contentVersion: cache!.version + 1, ...(scope !== "" ? { scope } : {}), ...identity, ...extra };
+    }
     return {
-      url: page.url(),
-      title: await page.title(),
-      tree: data.tree.slice(0, maxText),
-      truncated: data.truncated || data.tree.length > maxText,
-      refs: data.refs.length,
+      diff: true,
+      contentVersion: cache!.version + 1,
+      changedFrom: d.changedFrom,
+      removed: d.removed,
+      ...(scope !== "" ? { scope } : {}),
+      [ariaMode ? "tree" : "text"]: (d.lines ?? []).join("\n").slice(0, maxText),
+      truncated: false,
+      ...identity,
+      ...extra,
     };
   }
-  const maxLinks = args.maxLinks ?? config.maxLinks;
-  const data = await page.evaluate(
-    ([maxT, maxL]) => {
-      const text = document.body ? document.body.innerText : "";
-      const links = Array.from(document.querySelectorAll("a"))
-        .slice(0, maxL)
-        .map((a) => ({
-          text: (a.innerText || a.textContent || "").trim().slice(0, 200),
-          href: a.href,
-        }));
-      const inputs = document.querySelectorAll("input, textarea, select").length;
-      return { text, links, inputs };
-    },
-    [maxText, maxLinks],
-  );
-  const compressed = compressText(data.text);
+  // 全量(不传 since,或 since 已过期 → 回落全量并附 stale 提示)
+  setSnapshotCache(page, {
+    version: (cache?.version ?? 0) + 1,
+    text: ariaMode ? (cache?.text ?? "") : content,
+    aria: ariaMode ? content : (cache?.aria ?? ""),
+  });
   return {
-    url: page.url(),
-    title: await page.title(),
-    text: compressed.slice(0, maxText),
-    truncated: compressed.length > maxText,
-    links: data.links,
-    inputs: data.inputs,
+    contentVersion: (cache?.version ?? 0) + 1,
+    ...(since !== undefined ? { stale: true } : {}),
+    ...(scope !== "" ? { scope } : {}),
+    [ariaMode ? "tree" : "text"]: content.slice(0, maxText),
+    truncated: ariaMode ? walkerTruncated || content.length > maxText : content.length > maxText,
+    ...identity,
+    ...extra,
   };
 }
 
@@ -519,6 +849,403 @@ export async function reloadTool(config: BrowserConfig) {
   const page = await getPage(config);
   await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
   return { ...(await pageIdentity(page)) };
+}
+
+// ---------------------------------------------------------------------------
+// browser_doctor:健康诊断(channel/可执行文件、目录权限、会话状态、面板可达性)
+// ---------------------------------------------------------------------------
+
+/** 一项诊断结果(ok=false 时附 advice 修复建议)。导出供测试。 */
+export interface DoctorCheck {
+  name: string;
+  ok: boolean;
+  detail: string;
+  advice?: string;
+}
+
+/** 面板自检探针(由 index.ts 在注册 API 后注入;fetch 本机 /status)。 */
+let doctorProbe: ((basePath: string) => Promise<{ ok: boolean; detail: string; advice?: string }>) | null = null;
+
+export function setDoctorProbe(fn: ((basePath: string) => Promise<{ ok: boolean; detail: string; advice?: string }>) | null): void {
+  doctorProbe = fn;
+}
+
+/** 目录可写性检查(mkdir + 写探针文件 + 删除)。导出供测试。 */
+export function checkWritableDir(dir: string): { ok: boolean; detail: string } {
+  try {
+    mkdirSync(dir, { recursive: true });
+    const probe = join(dir, `.doctor-probe-${Date.now()}`);
+    writeFileSync(probe, "ok");
+    unlinkSync(probe);
+    return { ok: true, detail: dir };
+  } catch (e) {
+    return { ok: false, detail: `${dir} — ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** 可执行文件存在性检查(executablePath 显式配置用)。导出供测试。 */
+export function checkExecutable(path: string): DoctorCheck {
+  if (!existsSync(path)) {
+    return {
+      name: "executable",
+      ok: false,
+      detail: `executablePath 指向的文件不存在: ${path}`,
+      advice: "修正 cordis.patch.yml 的 browser.executablePath,或清空该字段改用 channel 自动探测",
+    };
+  }
+  try {
+    accessSync(path, fsConstants.X_OK);
+  } catch {
+    return {
+      name: "executable",
+      ok: false,
+      detail: `文件存在但不可执行: ${path}`,
+      advice: "chmod +x 或确认路径指向浏览器主程序",
+    };
+  }
+  const st = statSync(path);
+  return {
+    name: "executable",
+    ok: st.isFile(),
+    detail: st.isFile() ? path : `不是普通文件: ${path}`,
+    ...(st.isFile() ? {} : { advice: "确认路径指向浏览器可执行文件而非目录" }),
+  };
+}
+
+/**
+ * 命名隔离上下文:同一浏览器进程内独立 cookies/storage 的"标签组"。
+ * 页注册进 profile 标签表(所有既有工具直接可用),context 只做归属记录:
+ * list / new(name?, url?) / switch(激活该组的一页,没有则新开) / close(整组关闭)。
+ * 持久模式(userDataDir)浏览器只有单一 context,不支持本工具(用 profiles 替代)。
+ */
+export async function contextTool(config: BrowserConfig, args: Record<string, any>) {
+  const action = args.action ?? "list";
+  const state = stateOf();
+  const contexts = namedContextsOf();
+  if (action === "list") {
+    return {
+      contexts: Array.from(contexts.entries()).map(([name, c]) => {
+        const alive = Array.from(c.pageIds).filter((id) => state.pages.has(id));
+        return {
+          name,
+          pages: alive.length,
+          active: state.activeId !== null && c.pageIds.has(state.activeId),
+          createdAt: c.createdAt,
+        };
+      }),
+      profile: currentProfile,
+    };
+  }
+  if (action === "new") {
+    const name = String(args.name ?? "").trim() || `ctx-${contexts.size + 1}`;
+    if (contexts.has(name)) throw new Error(`context "${name}" 已存在;如需重建先 browser_context { action: "close", name }`);
+    if (state.browser === null && state.context === null) await launchProfile(currentProfile, config);
+    if (state.browser === null) {
+      throw new Error(
+        "持久模式(userDataDir)的浏览器只有单一 context,不支持多 context;需要多账号隔离请配置 profiles 多套 userDataDir",
+      );
+    }
+    const context = await state.browser.newContext();
+    const page = await context.newPage();
+    attachPage(page, profileConfig(config, currentProfile));
+    const id = registerTabPage(state, page);
+    const entry = { context, pageIds: new Set<number>([id]), createdAt: Date.now() };
+    contexts.set(name, entry);
+    page.on("close", () => {
+      entry.pageIds.delete(id);
+    });
+    let navigated: string | undefined;
+    if (typeof args.url === "string" && args.url) {
+      await page.goto(args.url, { waitUntil: "domcontentloaded" });
+      navigated = page.url();
+    }
+    return {
+      created: name,
+      ...(navigated !== undefined ? { navigated } : {}),
+      ...(await pageIdentity(page)),
+    };
+  }
+  if (action === "switch") {
+    const name = String(args.name ?? "").trim();
+    if (!name) throw new Error('switch 需要 name(用 list 查看已有 context)');
+    const entry = contexts.get(name);
+    if (entry === undefined) {
+      throw new Error(`context "${name}" 不存在;已有: ${Array.from(contexts.keys()).join("、") || "(无)"}`);
+    }
+    for (const id of entry.pageIds) {
+      const page = state.pages.get(id);
+      if (page !== undefined) {
+        state.activeId = id;
+        return { switched: name, ...(await pageIdentity(page)) };
+      }
+    }
+    // 组内页全关:在原 context 里新开一页(cookie/storage 仍在)
+    const page = await entry.context.newPage();
+    attachPage(page, profileConfig(config, currentProfile));
+    const id = registerTabPage(state, page);
+    entry.pageIds.add(id);
+    page.on("close", () => {
+      entry.pageIds.delete(id);
+    });
+    return { switched: name, pages: 1, ...(await pageIdentity(page)) };
+  }
+  if (action === "close") {
+    const name = String(args.name ?? "").trim();
+    if (!name) throw new Error('close 需要 name');
+    const entry = contexts.get(name);
+    if (entry === undefined) throw new Error(`context "${name}" 不存在`);
+    for (const id of entry.pageIds) {
+      state.pages.delete(id);
+      if (state.activeId === id) {
+        state.activeId = Array.from(state.pages.keys()).pop() ?? null;
+      }
+    }
+    entry.pageIds.clear();
+    contexts.delete(name);
+    try {
+      await entry.context.close();
+    } catch {
+      /* already closed */
+    }
+    return { closed: name, remainingTabs: state.pages.size };
+  }
+  throw new Error(`未知 action: ${action}(list | new | switch | close)`);
+}
+
+// ---------------------------------------------------------------------------
+// 面板双向化支撑:元素拾取(人选元素 → selector)与操作预告高亮
+// ---------------------------------------------------------------------------
+
+/**
+ * 页内拾取器(evaluate 注入):一次性 click 捕获 —— 点击任意元素时阻止默认行为,
+ * 计算稳定 CSS 路径 + 元素信息存 window.__dshPickResult(面板轮询读取后自清)。
+ * 与 aria walker 的 cssPath 同一套语义(#id → [data-testid] → nth-of-type 链)。
+ */
+export function pickElementInjector(): void {
+  const w = window as unknown as Record<string, unknown>;
+  if (w.__dshPicking === true) return;
+  w.__dshPicking = true;
+  function cssPath(el: Element): string {
+    if (el.id) return `#${CSS.escape(el.id)}`;
+    const testid = el.getAttribute("data-testid") ?? el.getAttribute("data-test-id");
+    if (testid) return `[data-testid="${testid.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`;
+    const parts: string[] = [];
+    let cur: Element | null = el;
+    while (cur && cur !== document.body && parts.length < 6) {
+      const tag = cur.tagName.toLowerCase();
+      const parent: Element | null = cur.parentElement;
+      if (!parent) {
+        parts.unshift(tag);
+        break;
+      }
+      const sameTag = Array.from(parent.children).filter((c) => c.tagName === cur!.tagName);
+      const idx = sameTag.indexOf(cur) + 1;
+      parts.unshift(sameTag.length > 1 ? `${tag}:nth-of-type(${idx})` : tag);
+      cur = parent;
+    }
+    return parts.join(" > ");
+  }
+  const handler = (e: MouseEvent) => {
+    const el = e.target instanceof Element ? e.target : null;
+    if (el === null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const aria = el.getAttribute("aria-label");
+    w.__dshPickResult = {
+      selector: cssPath(el),
+      tag: el.tagName.toLowerCase(),
+      id: el.id ?? "",
+      testid: el.getAttribute("data-testid") ?? el.getAttribute("data-test-id") ?? "",
+      role: el.getAttribute("role") ?? "",
+      name: aria && aria.trim() ? aria.trim().slice(0, 60) : ((el as HTMLElement).innerText || el.textContent || "").trim().slice(0, 60),
+      url: location.href,
+    };
+    w.__dshPicking = false;
+    document.removeEventListener("click", handler, true);
+  };
+  document.addEventListener("click", handler, true);
+}
+
+/** 读取并清空拾取结果(ui.ts /pick GET 调用;无结果返回 null)。 */
+export async function takePickResult(page: Page): Promise<Record<string, unknown> | null> {
+  try {
+    const r = await page.evaluate(() => {
+      const w = window as unknown as Record<string, unknown>;
+      const out = (w.__dshPickResult as Record<string, unknown> | undefined) ?? null;
+      w.__dshPickResult = null;
+      w.__dshPicking = false;
+      return out;
+    });
+    return r as Record<string, unknown> | null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 操作预告高亮:agent 即将 click/type/select/press 的元素在页面上琥珀色描边
+ * ~1.5 秒。异步不阻塞(fire-and-forget,任何失败静默),不影响操作时序。
+ */
+export function previewHighlight(page: Page | null, selector: string, label: string): void {
+  if (page === null || selector === "") return;
+  void page
+    .evaluate(
+      (arg: { selector: string; label: string }) => {
+        const el = document.querySelector(arg.selector);
+        if (el === null) return;
+        const rect = el.getBoundingClientRect();
+        const box = document.createElement("div");
+        box.setAttribute("data-dsh-preview", "");
+        Object.assign(box.style, {
+          position: "fixed",
+          left: `${rect.left - 2}px`,
+          top: `${rect.top - 2}px`,
+          width: `${rect.width + 4}px`,
+          height: `${rect.height + 4}px`,
+          border: "2px solid #f59e0b",
+          borderRadius: "4px",
+          background: "rgba(245, 158, 11, 0.08)",
+          pointerEvents: "none",
+          zIndex: "2147483646",
+          boxSizing: "border-box",
+          transition: "opacity 0.3s",
+        } as Partial<CSSStyleDeclaration>);
+        const tip = document.createElement("div");
+        Object.assign(tip.style, {
+          position: "absolute",
+          left: "0",
+          top: "-20px",
+          font: "12px/1.4 -apple-system,'PingFang SC',sans-serif",
+          color: "#fff",
+          background: "#f59e0b",
+          padding: "1px 6px",
+          borderRadius: "4px",
+          whiteSpace: "nowrap",
+        } as Partial<CSSStyleDeclaration>);
+        tip.textContent = `agent: ${arg.label}`;
+        box.appendChild(tip);
+        document.documentElement.appendChild(box);
+        setTimeout(() => {
+          box.style.opacity = "0";
+          setTimeout(() => box.remove(), 400);
+        }, 1_200);
+      },
+      { selector, label },
+    )
+    .catch(() => {
+      /* 页面导航/关闭:高亮本就是尽力而为 */
+    });
+}
+
+/** 一次性健康诊断:不启动浏览器,只做静态/本地检查。 */
+export async function doctorTool(config: BrowserConfig, _args: Record<string, any>, exec?: ToolRunContext) {
+  const checks: DoctorCheck[] = [];
+
+  // 1) 浏览器可执行文件
+  if (config.executablePath) {
+    checks.push(checkExecutable(config.executablePath));
+  } else {
+    const channel = config.channel ?? "auto";
+    checks.push({
+      name: "channel",
+      ok: true,
+      detail:
+        channel === "auto" || channel === ""
+          ? "auto:按平台序探测已装浏览器(chrome → msedge → chromium;Windows 为 msedge 优先),启动失败会提示安装"
+          : `channel = ${channel}(由 Playwright 在首次启动时解析)`,
+    });
+    // 附带看一眼 playwright 自带 chromium 是否可用(作为最后回退)
+    try {
+      const pw = await loadPlaywright();
+      const bundled = pw.chromium.executablePath();
+      checks.push({
+        name: "bundled-chromium",
+        ok: existsSync(bundled),
+        detail: existsSync(bundled) ? bundled : `playwright 捆绑 chromium 未安装(${bundled})`,
+        ...(existsSync(bundled)
+          ? {}
+          : { advice: "可选:npx playwright install chromium 安装兜底浏览器,或依赖系统已装的 Edge/Chrome" }),
+      });
+    } catch {
+      checks.push({
+        name: "playwright-core",
+        ok: false,
+        detail: "playwright-core 不可用",
+        advice: "在 profile 中安装 playwright-core(dsh plugin --profile web add playwright-core)",
+      });
+    }
+  }
+
+  // 2) userDataDir 可写性
+  if (config.userDataDir) {
+    const w = checkWritableDir(config.userDataDir);
+    checks.push({
+      name: "userDataDir",
+      ok: w.ok,
+      detail: w.ok ? `${config.userDataDir}(登录态将持久化)` : w.detail,
+      ...(!w.ok ? { advice: "确认目录存在且当前用户可写" } : {}),
+    });
+  } else {
+    checks.push({ name: "userDataDir", ok: true, detail: "未配置(登录态随会话,DSH 重启后失效)" });
+  }
+
+  // 3) 工作区基准目录 + 截图/下载/基线目录
+  const baseDir = workspaceBaseDir(config, exec);
+  const baseWritable = checkWritableDir(baseDir);
+  checks.push({
+    name: "workspaceDir",
+    ok: baseWritable.ok,
+    detail: baseWritable.ok
+      ? `${baseDir}(来源: ${config.workspaceDir ? "config.workspaceDir" : "会话 cwd 探测"})`
+      : baseWritable.detail,
+    ...(!baseWritable.ok ? { advice: "设置 config.workspaceDir 钉死基准目录,或修正会话工作区权限" } : {}),
+  });
+  for (const [name, dir] of [
+    ["screenshotDir", config.screenshotDir ?? ".dsh-browser/screenshots"],
+    ["downloadDir", config.downloadDir ?? ".dsh-browser/downloads"],
+    ["baselineDir", config.baselineDir ?? ".dsh-browser/baselines"],
+  ] as const) {
+    const abs = isAbsolute(dir) ? dir : resolve(baseDir, dir);
+    const w = checkWritableDir(abs);
+    checks.push({
+      name,
+      ok: w.ok,
+      detail: w.ok ? abs : w.detail,
+      ...(!w.ok ? { advice: `检查 ${abs} 的创建/写权限(父目录需可写)` } : {}),
+    });
+  }
+
+  // 4) 当前会话状态(信息性,恒 ok)
+  const state = stateOf();
+  checks.push({
+    name: "session",
+    ok: true,
+    detail: `当前 profile "${currentProfile}"${state.browser !== null ? " 已启动浏览器" : " 浏览器未启动(首次调用工具时自动启动)"} · ${state.pages.size} 个标签 · 共 ${profileStates.size} 个 profile`,
+  });
+
+  // 5) 面板 API 可达性(探针由 index.ts 注入;无 webServer 的进程跳过)
+  const basePath = config.basePath ?? "/browser";
+  if (doctorProbe !== null) {
+    try {
+      const r = await doctorProbe(basePath);
+      checks.push({ name: "panel", ok: r.ok, detail: r.detail, ...(r.advice ? { advice: r.advice } : {}) });
+    } catch (e) {
+      checks.push({
+        name: "panel",
+        ok: false,
+        detail: `探针执行失败: ${e instanceof Error ? e.message : String(e)}`,
+        advice: `在浏览器打开 http://<DSH地址>${basePath}/status 手动验证`,
+      });
+    }
+  } else {
+    checks.push({ name: "panel", ok: true, detail: `本进程无 webServer(工具半),面板 API 基路径 ${basePath}` });
+  }
+
+  const failed = checks.filter((c) => !c.ok).length;
+  return {
+    checks,
+    summary: { ok: failed === 0, passed: checks.length - failed, failed },
+  };
 }
 
 export async function statusTool() {
@@ -1000,6 +1727,146 @@ export async function waitForLoginTool(config: BrowserConfig, args: Record<strin
   const timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? 120_000) || 120_000, 5_000), 600_000);
   const result = await pollCondition(page, condition, timeoutMs, 2_000);
   return { loggedIn: result.ok, ...(await pageIdentity(page)) };
+}
+
+/**
+ * 人工接管等待(通用版 wait_for_login):agent 把控制权交还给用户(验证码 /
+ * 二次确认 / 人工复核等)。instruction 会显示在实时画面面板;完成条件三选一:
+ * successSelector(元素出现)/ successUrl(URL 正则)/ 两者都不给则以
+ * URL 变化或页面内容签名变化视为完成。轮询间隔 2 秒,超时返回 completed:false
+ * (不抛错)。导出 runPauseOnPage 供测试注入 fake page。
+ */
+export async function runPauseOnPage(
+  page: Page,
+  args: Record<string, any>,
+): Promise<{ completed: boolean; waitedMs: number; detail: string }> {
+  const instruction = typeof args.instruction === "string" ? args.instruction.trim() : "";
+  if (!instruction) {
+    throw new Error("缺少 instruction: 请说明需要人工完成什么操作(如「请输入短信验证码」)");
+  }
+  const timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? 300_000) || 300_000, 1_000), 600_000);
+  let startUrl = "";
+  try {
+    startUrl = page.url();
+  } catch {
+    /* 页面暂不可用(导航中/已关闭):交给轮询阶段统一记录 detail */
+  }
+  const startedAt = Date.now();
+  const pageSignature = async (): Promise<string> => {
+    try {
+      return await page.evaluate(() => {
+        const body = document.body;
+        return `${location.href}|${body ? body.innerText.length : 0}|${document.querySelectorAll("input,button,a").length}`;
+      });
+    } catch {
+      return page.url();
+    }
+  };
+  const startSig = args.successSelector || args.successUrl ? "" : await pageSignature();
+  let completed = false;
+  let detail = `等待人工操作超时(${timeoutMs}ms)`;
+  setPauseInstruction(instruction);
+  try {
+    const deadline = startedAt + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        if (args.successSelector) {
+          completed = await page.locator(String(args.successSelector)).first().isVisible();
+        } else if (args.successUrl) {
+          completed = new RegExp(String(args.successUrl)).test(page.url());
+        } else {
+          completed = page.url() !== startUrl || (await pageSignature()) !== startSig;
+        }
+      } catch (e) {
+        completed = false;
+        detail = `检查完成条件出错: ${e instanceof Error ? e.message : String(e)}`;
+      }
+      if (completed) {
+        detail = "人工操作完成";
+        break;
+      }
+      await page.waitForTimeout(2_000);
+    }
+  } finally {
+    clearPauseInstruction();
+  }
+  return { completed, waitedMs: Date.now() - startedAt, detail };
+}
+
+/** 人工接管等待工具入口(缺 instruction 在启动浏览器前即校验,失败更快)。 */
+export async function pauseForHumanTool(config: BrowserConfig, args: Record<string, any>) {
+  const instruction = typeof args.instruction === "string" ? args.instruction.trim() : "";
+  if (!instruction) {
+    throw new Error("缺少 instruction: 请说明需要人工完成什么操作(如「请输入短信验证码」)");
+  }
+  const page = await getPage(config);
+  const result = await runPauseOnPage(page, args);
+  return {
+    completed: result.completed,
+    status: result.completed ? ("completed" as const) : ("timedOut" as const),
+    instruction,
+    detail: result.detail,
+    waitedMs: result.waitedMs,
+    ...(await pageIdentity(page)),
+  };
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * 敏感操作审批:agent 在执行提交/删除/支付类动作前调用,把审批请求推到实时
+ * 画面面板,挂起等待用户点「允许/拒绝」。超时视为拒绝(fail-closed)。
+ * 用户允许时返回 { decision: "allowed", ... };拒绝/超时**抛错**(消息含原因),
+ * 使 live 调用与 replay/batch 步骤统一按失败处理,agent 不应继续敏感动作。
+ * 决策通过 session.resolveConfirm(面板 POST)写入。
+ */
+export async function confirmTool(config: BrowserConfig, args: Record<string, any>) {
+  const reason = typeof args.reason === "string" ? args.reason.trim() : "";
+  if (!reason) {
+    throw new Error("缺少 reason: 请说明要执行什么敏感操作、为什么需要审批(如「提交白名单表单,会产生线上数据变更」)");
+  }
+  const timeoutMs = Math.min(
+    Math.max(Number(args.timeoutMs ?? config.confirmTimeoutMs ?? 60_000) || 60_000, 1_000),
+    600_000,
+  );
+  const id = `cfm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const entry: import("./session.js").PendingConfirm = {
+    id,
+    reason,
+    tool: typeof args.tool === "string" && args.tool ? args.tool : undefined,
+    args: args.args && typeof args.args === "object" ? args.args : undefined,
+    startedAt: Date.now(),
+  };
+  setPendingConfirm(entry);
+  const startedAt = Date.now();
+  let decision: "allowed" | "denied" | "timeout" = "timeout";
+  let detail = `等待审批超时(${timeoutMs}ms),按拒绝处理`;
+  try {
+    const deadline = startedAt + timeoutMs;
+    while (Date.now() < deadline) {
+      await sleep(500);
+      const pending = getPendingConfirm();
+      if (pending === null || pending.id !== id) {
+        // 被并发的新审批取代:本次按拒绝处理,避免误放行
+        decision = "denied";
+        detail = "审批请求已被新的审批取代,按拒绝处理";
+        break;
+      }
+      if (pending.decision !== undefined) {
+        decision = pending.decision;
+        detail = decision === "allowed" ? "用户允许执行" : "用户拒绝执行";
+        break;
+      }
+    }
+  } finally {
+    // 只有仍是本次请求时才清理(被取代时不动新请求)
+    const pending = getPendingConfirm();
+    if (pending !== null && pending.id === id) clearPendingConfirm();
+  }
+  if (decision !== "allowed") {
+    throw new Error(`敏感操作被拒绝: ${reason} — ${detail}`);
+  }
+  return { decision, id, reason, waitedMs: Date.now() - startedAt, detail };
 }
 
 /** 断言:条件在 timeoutMs 内成立则通过,否则失败并自动截图存证据。visual 断言走像素比对。 */

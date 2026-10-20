@@ -4,8 +4,8 @@ DSH 插件:共享 Playwright 浏览器自动化 + 原生界面实时画面面板
 
 | 模块 | 做什么 |
 | --- | --- |
-| 🧭 **浏览器自动化** | 共享 Playwright 浏览器:多标签、多 profile、下载/上传、Cookie、表单回放,31 个 `browser_*` 工具 |
-| 🖥️ **实时画面** | 注入 DSH 界面右下角悬浮面板:浏览器状态 + 实时缩略图,点开大屏模态框(2 秒轮询画面 + 访问历史) |
+| 🧭 **浏览器自动化** | 共享 Playwright 浏览器:多标签、多 profile、隔离 context、下载/上传、Cookie、表单回放,36 个 `browser_*` 工具 |
+| 🖥️ **实时画面** | 注入 DSH 界面右下角悬浮面板:浏览器状态 + 实时缩略图,点开大屏模态框(2 秒轮询画面 + 访问历史);**双向协作**——agent 等待人工操作/敏感审批时显示交互横幅、执行点击/输入前目标元素琥珀色高亮预告,大屏「🎯 点选元素」一键拾取任意元素生成稳定 selector 供复制给 agent,「最近回归」行点击直接内嵌查看 HTML 回归报告 |
 | ✅ **回归测试闭环** | 录制回放 + 选择器自愈 + 参数化/数据驱动 + 视觉回归 + 运行历史与报告导出 |
 
 设计原则:能做的一次性操作交给 agent 用 bash 完成,插件只做 bash 做不到的常驻浏览器自动化。唯一第三方运行时依赖是 `playwright-core`(复用系统已装的 Edge/Chrome,无需下载 Chromium),不依赖任何 `@deepseek-ai` 运行时包。
@@ -44,7 +44,12 @@ dsh plugin --profile web add dsh-browser-view
         healTimeoutMs: 3000       # 自愈时单次尝试的超时
         maxRefs: 200              # ARIA 快照每次分配的 ref 上限
         maxRows: 1000             # browser_extract 单次聚合行数上限
+        confirmMode: off          # off | manual(manual 时 systemPrompt 要求敏感动作前先 browser_confirm)
+        confirmTimeoutMs: 60000   # browser_confirm 等待人工决策的默认超时
+        toolset: all              # all(默认全量 36 个)| core(高频核心集 24 个,降 systemPrompt 常驻 token)
 ```
+
+**工具集裁剪(toolset)**:默认 `all` 注册全部工具。日常浏览/操作/人机协作为主的会话可设 `toolset: core`——只注册 24 个高频核心工具(打开/快照/查找/点击/输入/等待/断言/网络/标签/下载上传/登录等待/人工接管/审批/诊断),`browser_record / replay / report / extract / form / profile / context / cookies` 等低频工具不注册、不占 systemPrompt 常驻 token(低频工具的录制管理界面不受影响,已有录制仍可回放,只是 agent 会话内无这些工具)。需要做回归测试或数据抓取时把配置改回 `all` 并重启 DSH 即可。
 
 ## 浏览器工具
 
@@ -52,7 +57,8 @@ dsh plugin --profile web add dsh-browser-view
 | --- | --- |
 | `browser_open` | 打开 URL |
 | `browser_tabs` | 标签管理:list / new / switch / close(按 id 或 index) |
-| `browser_snapshot` | 页面快照:`mode: "text"`(默认)返回压缩后的文本/链接/输入框;`mode: "aria"` 返回可访问性树,可交互元素带 `[ref=eN]` 短引用 |
+| `browser_snapshot` | 页面快照:`mode: "text"`(默认)返回压缩后的文本/链接/输入框;`mode: "aria"` 返回可访问性树,可交互元素带 `[ref=eN]` 短引用;`scope`(CSS 选择器)限定提取区域(text/aria 都生效);`since`(上次返回的 contentVersion)增量重读——未变返回 `unchanged`,变了只返回变化行(`diff` + `changedFrom`/`removed`),翻页后重读 token 降一个量级 |
+| `browser_find` | 语义元素定位:按名称/id/data-testid 查找可交互元素,只返回命中 ref + ancestors 区域链(大页面定位单目标比全量 aria 快照省 95%+ token);`exact` 精确匹配、`scope` 限定容器;多命中全返回,零命中附相近候选 |
 | `browser_elements` | 可交互元素结构化清单(input/button/select/链接 + 关联 label + 现成 CSS 选择器;有展开下拉时附可见选项) |
 | `browser_click` / `browser_type` / `browser_press` | 点击 / 输入(可清空、可回车提交)/ 按键;`selector`(CSS)与 `ref`(aria 快照)二选一 |
 | `browser_select` | 下拉选择原语:原生 `<select>` 与 antd / element-plus / ARIA listbox 通用,selector/ref + option 文本一步完成;找不到选项时报错并列出可见选项 |
@@ -61,18 +67,22 @@ dsh plugin --profile web add dsh-browser-view
 | `browser_screenshot` | 截图存为 PNG(自动清理,见下);`baseline: "<名>"` 存为视觉回归基线(不受清理约束) |
 | `browser_wait` / `browser_back` / `browser_reload` | 等待 / 后退 / 刷新 |
 | `browser_wait_for_login` | 等待人工登录完成(配 `headless: false` 使用,见下) |
+| `browser_pause_for_human` | 人工接管等待:agent 把控制权暂时交还给用户(验证码/二次确认/人工复核),instruction 显示在实时画面面板;`successSelector` / `successUrl` 指定完成条件,都不给则 URL/页面内容变化即视为完成;轮询 2 秒,超时返回 `completed: false` 不抛错 |
+| `browser_confirm` | 敏感操作审批:提交/删除/支付类动作前调用,审批请求推送到实时画面面板等待用户点「允许/拒绝」;允许返回 `decision: "allowed"`,拒绝/超时(fail-closed)抛错,live 与 replay/batch 统一按失败处理 |
 | `browser_wait_for` | 通用显式等待(元素状态 / URL / 文本 / 数量 / eval,超时抛错) |
 | `browser_assert` | 结构化断言(失败自动截图存证据目录并报错);`visual: { baseline }` 做视觉回归断言(见下) |
 | `browser_network` | 接口记录查询:list / failed(4xx/5xx)/ wait(命中返回 waitMs,超时附最近请求摘要)/ stats(按 host 聚合计数/失败数/均耗时/状态码分布)/ clear,含请求/响应体(截断) |
 | `browser_extract` | 规则化结构化抽取:fields 定义 CSS 字段(支持嵌套/multiple),`next` 自动翻页聚合,导出 json / csv / jsonl / markdown 落盘工作区 |
-| `browser_record` | 操作录制:start / stop / save(list/delete 管理;save 支持 `stripReads` 剔除只读步骤、`vars` 把指定步骤字段抽成 `{{占位符}}`;selector 步骤自动附带元素指纹供回放自愈) |
+| `browser_record` | 操作录制:start / stop / save(list/delete 管理;save 支持 `stripReads` 剔除只读步骤、`vars` 把指定步骤字段抽成 `{{占位符}}`;selector 步骤自动附带元素指纹供回放自愈;**录制期间用户在浏览器中的手动输入/点击/选择也会进录制**,标记 `source: "human"`) |
 | `browser_replay` | 回放录制或步骤序列(回归测试,遇错可停);`vars` 注入占位符,`data` / `dataFile`(CSV)逐行数据驱动;选择器失效自动按指纹自愈 |
 | `browser_report` | 回归报告:list / show / export(运行历史自动记录,export 聚合为 Markdown / 自包含 HTML 落盘) |
 | `browser_status` / `browser_close` | 状态 / 关闭会话 |
+| `browser_doctor` | 健康诊断(不启动浏览器):可执行文件/channel、playwright-core、userDataDir 与截图/下载/基线目录写权限、工作区基准目录解析来源、会话状态、面板 API 可达性;失败项附修复建议。环境异常(文件落错位置/浏览器起不来)先跑它定位 |
 | `browser_download` / `browser_upload` | 下载(保存到工作区;`wait: true` 可轮询等待新下载)/ 上传本地文件 |
 | `browser_cookies` | Cookie 管理(list / set / clear,登录态处理) |
 | `browser_form` / `browser_form_save` / `browser_forms` | 批量填表 / 保存回放 / 管理已存表单 |
 | `browser_profile` | 多配置文件:work/personal 等独立会话与登录态(userDataDir 持久化) |
+| `browser_context` | 命名隔离上下文:同一浏览器内 cookies/storage 完全隔离的"标签组"(new/list/switch/close),适合多账号并行验证与干净会话抓取;页进普通标签表,所有工具直接可用。与 profile 的分工:**context = 临时并行隔离(不持久化),profile = 持久配置与登录态**;持久模式(userDataDir)不支持,用 profiles |
 
 **截图自动清理**:`browser_screenshot` 保存的 `.png` 自动修剪——每次截图后即时清理 + 每小时定时清扫;默认保留最近 7 天、最多 200 张(`screenshotMaxAgeDays` / `screenshotMaxCount`,设为 0 关闭对应规则),只清理截图目录直属文件。视觉回归基线(`baselineDir`)不参与清理。
 
@@ -136,6 +146,8 @@ browser_batch { steps: [
 **回归测试**:agent 跑通一轮流程后 `browser_record save <name>`,以后用 `browser_replay { name }` 一键回放(默认遇错即停,`failFast: false` 可继续);也可直接传 `steps` 数组。**save 的数据源**:做过 `browser_record start` → `stop` 的,保存该段录制;从未录制的,保存最近 100 次工具调用(返回值的 `source` 字段会标明 `recording` / `recent-log`)。save 时会检查 `browser_upload` 步骤引用的本地文件,缺失的以 `warnings` 返回(回放将失败,请及时重建或改用稳定路径)。已保存录制写入 `$DSH_HOME/.dsh-browser/recordings/<name>.json`(原子替换,名字自动安全化防路径穿越),重启 DSH 后自动加载,可跨会话复用;`browser_record list / delete` 管理。**录制管理界面**:DSH 设置弹窗 → 左侧导航「浏览器」页,可查看列表、展开步骤详情、删除录制。所有工具调用自动记录操作轨迹(面板显示最近 8 条,`/browser/log` 可取全量)。
 
 **选择器自愈**:录制(save)时每个 selector 步骤自动附带元素指纹(`data-testid` / role+name / 可见文本 / id / 标签)。回放时原选择器失败会按 `testid → role+name → text → id → tag+text` 降级重试(每次尝试限时 `healTimeoutMs`,默认 3s,避免等满全局超时),自愈成功的步骤在结果中标记 `healed: true, via: "role+name", resolved: "<新选择器>"` 并计入 `healedCount`——提示你该修录制里的选择器了,而不是默默吞掉页面漂移。仅作用于 replay/batch 的失败路径,live 工具不受影响;`config.selectorHealing: false` 可整体关闭。录制格式为 formatVersion 2,旧格式录制正常回放(无自愈)。
+
+**人机混合录制**:录制(`browser_record start` → `stop`)期间,用户在浏览器窗口中的手动操作——可交互元素上的**点击**、输入框的**输入**(change 提交时记当前值,非逐键)、原生下拉的**选择**——会自动进录制 buffer,映射为 `browser_click / browser_type / browser_select` 步骤并带同样的选择器指纹,`meta.source: "human"` 标记来源。典型范式:agent 打底导航到表单页 → `browser_record start` → 用户补验证码/短信等关键步 → `stop` + `save` → 之后整条流程可无人回放。agent 工具自己触发的页内事件用 1.5s 去重窗口排除,不会双记;文件选择(file input)与清空输入无法可靠回放,自动跳过。
 
 **参数化与数据驱动**:save 时用 `vars` 把指定步骤的字段抽成占位符:
 
@@ -208,6 +220,42 @@ config:
 4. `browser_wait_for_login` 检测到完成条件(默认 URL 跳转)后返回,agent 继续后续操作。
 
 配置 `userDataDir` 后,登录态(Cookie / localStorage)会保存到该目录,后续即使切回 `headless: true` 或重启 DSH,已登录的网站仍保持登录态。
+
+### 人工接管:验证码 / 二次确认 / 人工复核
+
+`browser_wait_for_login` 的通用版:`browser_pause_for_human` 适用于任何需要人补一步的场景。
+
+```ts
+browser_pause_for_human({
+  instruction: "请输入短信验证码并提交",
+  successSelector: ".dashboard",   // 或 successUrl: "dashboard",都不给则页面变化即完成
+  timeoutMs: 300000,
+})
+// → { completed, status: "completed" | "timedOut", instruction, detail, waitedMs, url, title }
+```
+
+- 调用后提示语会显示在界面右下角实时画面面板(琥珀色横幅),用户去浏览器窗口完成操作;
+- 完成条件默认为 URL 或页面内容发生变化(比登录场景的「URL 跳转」更宽,适合弹层/验证码);
+- 超时不抛错,返回 `completed: false`,agent 可再次调用或改走其他路径;
+- 也可用于录制中的人机混合回放:回放到该步即暂停等人。
+
+### 敏感操作审批(browser_confirm)
+
+```ts
+browser_confirm({
+  reason: "提交白名单表单,会产生线上数据变更",
+  tool: "browser_click",                    // 可选:即将执行的工具
+  args: { selector: "#submit" },            // 可选:面板展示用
+  timeoutMs: 60000,
+})
+// 用户允许 → { decision: "allowed", id, reason, waitedMs, detail }
+// 用户拒绝 / 超时 → 抛错「敏感操作被拒绝: …」,replay/batch 该步记为失败
+```
+
+- 审批卡片(红色横幅 + 允许/拒绝按钮)显示在界面右下角实时画面面板;
+- **fail-closed**:等待超时按拒绝处理,绝不默认放行;
+- 配置 `confirmMode: manual` 后,systemPrompt 会要求 agent 在提交/删除/支付类动作前必须先调用本工具(默认 `off`,不改变既有行为,工具仍可随时手动调用);
+- 回放含 browser_confirm 步骤时同样弹卡等人,人机混合回归的安全闸。
 
 ## 实时画面面板
 

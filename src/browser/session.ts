@@ -38,6 +38,32 @@ export function clearPageRefs(page: Page): void {
   refRegistry.delete(page);
 }
 
+/** 取页面当前完整 ref 表(browser_find 增量续号合并用;无则空 Map)。 */
+export function pageRefsOf(page: Page): Map<string, RefEntry> {
+  return refRegistry.get(page) ?? new Map<string, RefEntry>();
+}
+
+// ---------------------------------------------------------------------------
+// 快照缓存(browser_snapshot 增量模式):per-page 记录最近一次全量内容与版本号,
+// since 命中且内容未变 → unchanged;变了 → 行级 diff 只返回变化区域。
+// ---------------------------------------------------------------------------
+
+export interface SnapshotCache {
+  version: number;
+  text: string;
+  aria: string;
+}
+
+const snapshotCaches = new WeakMap<Page, SnapshotCache>();
+
+export function snapshotCacheOf(page: Page): SnapshotCache | undefined {
+  return snapshotCaches.get(page);
+}
+
+export function setSnapshotCache(page: Page, cache: SnapshotCache): void {
+  snapshotCaches.set(page, cache);
+}
+
 /** 已保存的录制脚本:name → 步骤数组。 */
 export const savedRecordings = new Map<string, { steps: ReplayStep[]; savedAt: number }>();
 /** 当前录制中的 buffer(非空 = 录制中)。 */
@@ -54,7 +80,9 @@ export interface TestCall {
   ts: number;
   error?: string;
   /** 录制时采集的选择器指纹(回放自愈用;register 包装层异步补齐)。 */
-  meta?: { hint?: SelectorHint };
+  meta?: { hint?: SelectorHint; source?: "human" };
+  /** source: "human" 表示这条来自用户在浏览器中的手动操作(混合录制)。 */
+  source?: "human";
 }
 
 /** 操作轨迹(全局,记录 currentProfile;上限 500 条)。 */
@@ -97,8 +125,221 @@ export function testLogOf(): TestCall[] {
   return [...testLog].reverse();
 }
 
+/**
+ * 当前人工接管等待状态(browser_pause_for_human 等待期间非空),
+ * 供实时画面面板展示「等待人工操作」提示。
+ */
+let pauseState: { instruction: string; startedAt: number } | null = null;
+
+export function setPauseInstruction(instruction: string): void {
+  pauseState = { instruction, startedAt: Date.now() };
+}
+
+export function clearPauseInstruction(): void {
+  pauseState = null;
+}
+
+export function currentPause(): { instruction: string; startedAt: number } | null {
+  return pauseState;
+}
+
+/** 一次待审批的敏感操作(browser_confirm 等待期间供面板展示与提交决策)。 */
+export interface PendingConfirm {
+  id: string;
+  reason: string;
+  tool?: string;
+  args?: Record<string, any>;
+  startedAt: number;
+  decision?: "allowed" | "denied";
+}
+
+let pendingConfirm: PendingConfirm | null = null;
+
+export function setPendingConfirm(entry: PendingConfirm): void {
+  pendingConfirm = entry;
+}
+
+export function getPendingConfirm(): PendingConfirm | null {
+  return pendingConfirm;
+}
+
+export function clearPendingConfirm(): void {
+  pendingConfirm = null;
+}
+
+/** 面板提交审批决策;id 不匹配(已被新审批取代/超时清理)时返回 false。 */
+export function resolveConfirm(id: string, decision: "allowed" | "denied"): boolean {
+  if (pendingConfirm === null || pendingConfirm.id !== id) return false;
+  pendingConfirm.decision = decision;
+  return true;
+}
+
 export function clearTestLog(): void {
   testLog.length = 0;
+}
+
+// ---------------------------------------------------------------------------
+// 人工操作进录制轨迹(human-in-the-loop 混合录制):
+// 页内监听 click/change → exposeBinding 回传 → 映射为 browser_click/type/select
+// 步骤(带选择器指纹)写入录制 buffer;agent 工具驱动的同类事件用时间窗去重。
+// ---------------------------------------------------------------------------
+
+/** window 上的回传 binding 名(须为合法 JS 标识符)。 */
+export const HUMAN_BINDING = "__dshBrowserHumanEvent";
+
+/** 最近一次 agent DOM 操作(点击/输入/选择)的时间戳;用于区分人手与工具回声。 */
+let lastAgentActionAt = 0;
+
+/** agent 即将/刚刚执行了 DOM 操作(register 包装层调用);1.5s 内的页内事件视为工具回声。 */
+export function noteAgentAction(): void {
+  lastAgentActionAt = Date.now();
+}
+
+/** 导出供测试:距上次 agent 操作是否在去重窗口内。 */
+export function agentActionRecent(now = Date.now(), windowMs = 1_500): boolean {
+  return now - lastAgentActionAt < windowMs;
+}
+
+/**
+ * 页内人工操作事件 → 录制步骤(纯函数,导出供测试)。
+ * payload 由 installHumanRecorder 生成:{ kind, selector, value?, testid?, role?, name?, id?, text?, tag? }。
+ * 无法映射(缺 selector / 未知 kind / 空输入)返回 null。
+ */
+export function humanEventToStep(payload: unknown): {
+  tool: string;
+  args: Record<string, any>;
+  meta: { hint: SelectorHint; source: "human" };
+} | null {
+  if (payload === null || typeof payload !== "object") return null;
+  const p = payload as Record<string, unknown>;
+  const selector = typeof p.selector === "string" ? p.selector : "";
+  if (!selector) return null;
+  const hint: SelectorHint = {
+    ...(p.testid !== undefined && p.testid !== "" ? { testid: String(p.testid) } : {}),
+    ...(p.role !== undefined && p.role !== "" ? { role: String(p.role) } : {}),
+    ...(p.name !== undefined && p.name !== "" ? { name: String(p.name) } : {}),
+    ...(p.id !== undefined && p.id !== "" ? { id: String(p.id) } : {}),
+    ...(p.text !== undefined && p.text !== "" ? { text: String(p.text) } : {}),
+    ...(p.tag !== undefined && p.tag !== "" ? { tag: String(p.tag) } : {}),
+  };
+  if (p.kind === "click") {
+    return { tool: "browser_click", args: { selector }, meta: { hint, source: "human" } };
+  }
+  if (p.kind === "input") {
+    const text = typeof p.value === "string" ? p.value : "";
+    if (text === "") return null; // 清空类输入无法可靠回放,跳过
+    return { tool: "browser_type", args: { selector, text }, meta: { hint, source: "human" } };
+  }
+  if (p.kind === "select") {
+    const option = typeof p.value === "string" ? p.value.trim() : "";
+    if (!option) return null;
+    return { tool: "browser_select", args: { selector, option }, meta: { hint, source: "human" } };
+  }
+  return null;
+}
+
+/** binding 回调入站口:仅录制中生效;去重窗口内(agent 工具回声)丢弃。 */
+function handleHumanEvent(payload: unknown): void {
+  if (!isRecording()) return;
+  if (agentActionRecent()) return;
+  const step = humanEventToStep(payload);
+  if (step === null) return;
+  recordCall({
+    tool: step.tool,
+    args: step.args,
+    ok: true,
+    ms: 0,
+    ts: Date.now(),
+    meta: step.meta,
+    source: "human",
+  });
+}
+
+/**
+ * 页内注入的人工操作监听(addInitScript 序列化;每次导航自动重装)。
+ * 监听常驻但 node 侧只在录制中生效,关闭录制等价于"移除"。
+ * 只上报可交互元素上的 click 与表单控件的 change,避免逐键噪音。
+ */
+export function installHumanRecorder(): void {
+  const w = window as unknown as Record<string, unknown>;
+  if (w.__dshHumanRecorder === true) return;
+  w.__dshHumanRecorder = true;
+  const BINDING = "__dshBrowserHumanEvent";
+  const INTERACTIVE =
+    "a,button,input,select,textarea,summary,[role='button'],[role='tab'],[role='menuitem'],[role='option'],[role='switch'],[role='checkbox']";
+
+  function cssPath(el: Element): string {
+    if (el.id) return `#${CSS.escape(el.id)}`;
+    const testid = el.getAttribute("data-testid") ?? el.getAttribute("data-test-id");
+    if (testid) return `[data-testid="${testid.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`;
+    const parts: string[] = [];
+    let cur: Element | null = el;
+    while (cur && cur !== document.body && parts.length < 6) {
+      const tag = cur.tagName.toLowerCase();
+      const parent: Element | null = cur.parentElement;
+      if (!parent) {
+        parts.unshift(tag);
+        break;
+      }
+      const sameTag = Array.from(parent.children).filter((c) => c.tagName === cur!.tagName);
+      const idx = sameTag.indexOf(cur) + 1;
+      parts.unshift(sameTag.length > 1 ? `${tag}:nth-of-type(${idx})` : tag);
+      cur = parent;
+    }
+    return parts.join(" > ");
+  }
+
+  function payloadOf(el: Element, kind: string, value?: string): Record<string, unknown> {
+    const aria = el.getAttribute("aria-label");
+    return {
+      kind,
+      selector: cssPath(el),
+      ...(value !== undefined ? { value } : {}),
+      testid: el.getAttribute("data-testid") ?? el.getAttribute("data-test-id") ?? "",
+      role: el.getAttribute("role") ?? "",
+      name: aria && aria.trim() ? aria.trim().slice(0, 40) : "",
+      id: el.id ?? "",
+      text: ((el as HTMLElement).innerText || el.textContent || "").trim().slice(0, 40),
+      tag: el.tagName.toLowerCase(),
+    };
+  }
+
+  function send(payload: Record<string, unknown>): void {
+    try {
+      const fn = w[BINDING] as ((p: unknown) => unknown) | undefined;
+      if (typeof fn === "function") void Promise.resolve(fn(payload)).catch(() => {});
+    } catch {
+      /* binding 未就绪(导航瞬间)忽略 */
+    }
+  }
+
+  document.addEventListener(
+    "click",
+    (e) => {
+      const target = e.target instanceof Element ? e.target.closest(INTERACTIVE) : null;
+      if (target === null) return;
+      send(payloadOf(target, "click"));
+    },
+    true,
+  );
+
+  document.addEventListener(
+    "change",
+    (e) => {
+      const t = e.target instanceof Element ? e.target : null;
+      if (t === null) return;
+      if (t.tagName === "SELECT") {
+        const opt = (t as HTMLSelectElement).selectedOptions[0];
+        send(payloadOf(t, "select", (opt ? opt.textContent : "").trim()));
+      } else if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") {
+        const type = (t.getAttribute("type") ?? "text").toLowerCase();
+        if (type === "checkbox" || type === "radio") return; // click 事件已记录
+        if (type === "file") return; // 文件选择无法回放
+        send(payloadOf(t, "input", (t as HTMLInputElement).value));
+      }
+    },
+    true,
+  );
 }
 
 /** 网络请求/响应记录。 */
@@ -287,6 +528,18 @@ export function attachPage(page: Page, config: BrowserConfig): void {
       durationMs: Date.now() - info.startedAt,
     });
   });
+  // 人工操作录制:exposeBinding 常驻(对后续导航生效),init script 每次导航自动
+  // 重装监听;node 侧只在 recording 开启时生效。失败(旧页面已绑定等)静默忽略。
+  void page
+    .exposeBinding(HUMAN_BINDING, (_source: unknown, payload: unknown) => {
+      handleHumanEvent(payload);
+      return null;
+    })
+    .then(() => page.addInitScript(installHumanRecorder))
+    .then(() => page.evaluate(installHumanRecorder).catch(() => {})) // 已加载的当前文档也装上
+    .catch(() => {
+      /* 绑定已存在或页面已关闭:忽略 */
+    });
 }
 
 export async function loadPlaywright(): Promise<typeof import("playwright-core")> {
@@ -363,6 +616,32 @@ export function stateOf(): ProfileState {
   return getProfileState(currentProfile);
 }
 
+// ---------------------------------------------------------------------------
+// 命名隔离上下文(browser_context):同一浏览器进程内独立 cookies/storage 的
+// "标签组"。页仍注册进 profile 的标签表(既有 tabs/getPage/activePage 全兼容),
+// 此处只额外记录 context → 页 id 的归属,供 list/switch/close。
+// ---------------------------------------------------------------------------
+
+export interface NamedContext {
+  context: BrowserContext;
+  pageIds: Set<number>;
+  createdAt: number;
+}
+
+const namedContexts = new Map<string, NamedContext>();
+
+export function namedContextsOf(): Map<string, NamedContext> {
+  return namedContexts;
+}
+
+/** 把一个已 attach 的页面注册进 profile 标签表并激活,返回分配的 tab id。 */
+export function registerTabPage(state: ProfileState, page: Page): number {
+  const id = state.counter++;
+  state.pages.set(id, page);
+  state.activeId = id;
+  return id;
+}
+
 /** 新建一个页面(当前 profile 会话未启动时先启动)。 */
 export async function newPage(config: BrowserConfig): Promise<Page> {
   const state = stateOf();
@@ -421,6 +700,7 @@ export async function tabList() {
 }
 
 export async function closeBrowser(): Promise<void> {
+  namedContexts.clear();
   for (const [name, state] of profileStates) {
     const { browser, context } = state;
     state.browser = null;

@@ -33,6 +33,18 @@ export interface BrowserConfig {
   maxRefs?: number;
   /** browser_extract 单次最多聚合的行数(默认 1000)。 */
   maxRows?: number;
+  /**
+   * 敏感操作审批模式:off(默认,行为与 v0.2 一致,工具仍可手动调用)|
+   * manual(systemPrompt 指示 agent 在提交/删除/支付类动作前调用 browser_confirm)。
+   */
+  confirmMode?: "off" | "manual";
+  /** browser_confirm 等待人工决策的默认超时毫秒(默认 60000)。 */
+  confirmTimeoutMs?: number;
+  /**
+   * 工具集:all(默认,全部工具)| core(只注册高频核心集,低频的
+   * 录制/回放/报告/抽取/profile 等不注册,降 systemPrompt 常驻 token)。
+   */
+  toolset?: "core" | "all";
 }
 
 /** 一个命名 profile 的会话状态。 */
@@ -93,5 +105,5 @@ export interface SelectorHint {
 export interface ReplayStep {
   tool: string;
   args: any;
-  meta?: { hint?: SelectorHint };
+  meta?: { hint?: SelectorHint; source?: "human" };
 }

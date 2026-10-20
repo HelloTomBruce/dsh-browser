@@ -139,8 +139,8 @@ describe("静态契约:所有工具声明完整 outputSchema", () => {
     expect(validateSchema(s, {})).not.toEqual([]); // required 缺失
   });
 
-  it("注册了全部 31 个 browser_* 工具", () => {
-    expect(tools.size).toBe(31);
+  it("注册了全部 36 个 browser_* 工具", () => {
+    expect(tools.size).toBe(36);
   });
 
   it("每个工具的 outputSchema 都是带 properties 的对象 schema", () => {

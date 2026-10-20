@@ -1,6 +1,6 @@
 import type { Locator, Page } from "playwright-core";
 import type { ToolRunContext } from "../lib/types.js";
-import type { BrowserConfig, ReplayStep, SelectorHint } from "./types.js";
+import type { BrowserConfig, RefEntry, ReplayStep, SelectorHint } from "./types.js";
 import { type RunRecord } from "./reports.js";
 /** 读取 PNG 文件头(IHDR)中的宽高,不解码像素(导出供测试)。 */
 export declare function pngSize(buf: Buffer): {
@@ -32,27 +32,94 @@ export declare function openTool(config: BrowserConfig, args: Record<string, any
  * 只折叠完全相同的相邻行,不重排、不删改非重复内容。
  */
 export declare function compressText(text: string): string;
+/** 最长公共子串长度(小写比较;零依赖,导出供测试)。 */
+export declare function lcsScore(a: string, b: string): number;
+/** 零命中时按相似度挑 top5 候选(导出供测试)。 */
+export declare function topSuggestions(query: string, candidates: {
+    role: string;
+    name: string;
+}[], count?: number): {
+    role: string;
+    name: string;
+    score: number;
+}[];
+/**
+ * 为命中元素增量分配 ref:沿用既有注册表的编号继续(不与上次快照冲突),
+ * 合并写回;返回带 ref 的命中列表(上限 maxRefs,超出标 truncated)。
+ * 导出供测试(纯逻辑,不依赖浏览器)。
+ */
+export declare function assignRefs(existing: Map<string, RefEntry>, matches: {
+    role: string;
+    name: string;
+    selector: string;
+    ancestors: string[];
+}[], maxRefs: number): {
+    withRefs: {
+        ref: string;
+        role: string;
+        name: string;
+        selector: string;
+        ancestors: string[];
+    }[];
+    merged: Map<string, RefEntry>;
+    truncated: boolean;
+};
+/**
+ * 语义元素定位:按名称(或 id/data-testid)在可交互元素中查找,只返回命中的
+ * ref + 区域上下文,不输出全量 aria 树 —— 大页面定位单个目标时 token 开销
+ * 远小于 browser_snapshot { mode: "aria" }。返回的 ref 可直接用于
+ * click/type/select/press。零命中不抛错,附最相近候选供二次定位。
+ */
+export declare function findTool(config: BrowserConfig, args: Record<string, any>): Promise<{
+    scanned: number;
+    url: string;
+    title: string;
+    truncated?: true | undefined;
+    suggestions?: {
+        role: string;
+        name: string;
+        score: number;
+    }[] | undefined;
+    found: number;
+    matches: {
+        ref: string;
+        role: string;
+        name: string;
+        ancestors: string[];
+    }[];
+}>;
+/**
+ * 行级 diff:掐掉公共前缀/后缀,返回变化区。导出供测试。
+ * 全等返回 { unchanged: true };否则 changedFrom 为新文本中变化区首行(1 起)。
+ */
+export declare function diffLines(oldText: string, newText: string): {
+    unchanged: boolean;
+    changedFrom?: number;
+    lines?: string[];
+    removed?: number;
+};
 export declare function snapshotTool(config: BrowserConfig, args: Record<string, any>): Promise<{
     url: string;
     title: string;
-    tree: string;
-    truncated: boolean;
-    refs: number;
-    text?: undefined;
-    links?: undefined;
-    inputs?: undefined;
+    scope?: string | undefined;
+    unchanged: boolean;
+    contentVersion: number;
 } | {
     url: string;
     title: string;
-    text: string;
     truncated: boolean;
-    links: {
-        text: string;
-        href: string;
-    }[];
-    inputs: number;
-    tree?: undefined;
-    refs?: undefined;
+    scope?: string | undefined;
+    diff: boolean;
+    contentVersion: number;
+    changedFrom: number | undefined;
+    removed: number | undefined;
+} | {
+    url: string;
+    title: string;
+    truncated: boolean;
+    scope?: string | undefined;
+    stale?: boolean | undefined;
+    contentVersion: number;
 }>;
 /**
  * 解析点击/输入目标为 Locator:selector 直译;ref 走注册表——
@@ -116,6 +183,95 @@ export declare function backTool(config: BrowserConfig): Promise<{
 export declare function reloadTool(config: BrowserConfig): Promise<{
     url: string;
     title: string;
+}>;
+/** 一项诊断结果(ok=false 时附 advice 修复建议)。导出供测试。 */
+export interface DoctorCheck {
+    name: string;
+    ok: boolean;
+    detail: string;
+    advice?: string;
+}
+export declare function setDoctorProbe(fn: ((basePath: string) => Promise<{
+    ok: boolean;
+    detail: string;
+    advice?: string;
+}>) | null): void;
+/** 目录可写性检查(mkdir + 写探针文件 + 删除)。导出供测试。 */
+export declare function checkWritableDir(dir: string): {
+    ok: boolean;
+    detail: string;
+};
+/** 可执行文件存在性检查(executablePath 显式配置用)。导出供测试。 */
+export declare function checkExecutable(path: string): DoctorCheck;
+/**
+ * 命名隔离上下文:同一浏览器进程内独立 cookies/storage 的"标签组"。
+ * 页注册进 profile 标签表(所有既有工具直接可用),context 只做归属记录:
+ * list / new(name?, url?) / switch(激活该组的一页,没有则新开) / close(整组关闭)。
+ * 持久模式(userDataDir)浏览器只有单一 context,不支持本工具(用 profiles 替代)。
+ */
+export declare function contextTool(config: BrowserConfig, args: Record<string, any>): Promise<{
+    contexts: {
+        name: string;
+        pages: number;
+        active: boolean;
+        createdAt: number;
+    }[];
+    profile: string;
+    closed?: undefined;
+    remainingTabs?: undefined;
+} | {
+    url: string;
+    title: string;
+    navigated?: string | undefined;
+    created: string;
+    contexts?: undefined;
+    profile?: undefined;
+    closed?: undefined;
+    remainingTabs?: undefined;
+} | {
+    url: string;
+    title: string;
+    switched: string;
+    contexts?: undefined;
+    profile?: undefined;
+    closed?: undefined;
+    remainingTabs?: undefined;
+} | {
+    url: string;
+    title: string;
+    switched: string;
+    pages: number;
+    contexts?: undefined;
+    profile?: undefined;
+    closed?: undefined;
+    remainingTabs?: undefined;
+} | {
+    closed: string;
+    remainingTabs: number;
+    contexts?: undefined;
+    profile?: undefined;
+}>;
+/**
+ * 页内拾取器(evaluate 注入):一次性 click 捕获 —— 点击任意元素时阻止默认行为,
+ * 计算稳定 CSS 路径 + 元素信息存 window.__dshPickResult(面板轮询读取后自清)。
+ * 与 aria walker 的 cssPath 同一套语义(#id → [data-testid] → nth-of-type 链)。
+ */
+export declare function pickElementInjector(): void;
+/** 读取并清空拾取结果(ui.ts /pick GET 调用;无结果返回 null)。 */
+export declare function takePickResult(page: Page): Promise<Record<string, unknown> | null>;
+/**
+ * 操作预告高亮:agent 即将 click/type/select/press 的元素在页面上琥珀色描边
+ * ~1.5 秒。异步不阻塞(fire-and-forget,任何失败静默),不影响操作时序。
+ */
+export declare function previewHighlight(page: Page | null, selector: string, label: string): void;
+/** 一次性健康诊断:不启动浏览器,只做静态/本地检查。 */
+export declare function doctorTool(config: BrowserConfig, _args: Record<string, any>, exec?: ToolRunContext): Promise<{
+    checks: DoctorCheck[];
+    summary: {
+        ok: boolean;
+        passed: number;
+        failed: number;
+    };
 }>;
 export declare function statusTool(): Promise<{
     open: boolean;
@@ -292,6 +448,42 @@ export declare function waitForLoginTool(config: BrowserConfig, args: Record<str
     url: string;
     title: string;
     loggedIn: boolean;
+}>;
+/**
+ * 人工接管等待(通用版 wait_for_login):agent 把控制权交还给用户(验证码 /
+ * 二次确认 / 人工复核等)。instruction 会显示在实时画面面板;完成条件三选一:
+ * successSelector(元素出现)/ successUrl(URL 正则)/ 两者都不给则以
+ * URL 变化或页面内容签名变化视为完成。轮询间隔 2 秒,超时返回 completed:false
+ * (不抛错)。导出 runPauseOnPage 供测试注入 fake page。
+ */
+export declare function runPauseOnPage(page: Page, args: Record<string, any>): Promise<{
+    completed: boolean;
+    waitedMs: number;
+    detail: string;
+}>;
+/** 人工接管等待工具入口(缺 instruction 在启动浏览器前即校验,失败更快)。 */
+export declare function pauseForHumanTool(config: BrowserConfig, args: Record<string, any>): Promise<{
+    url: string;
+    title: string;
+    completed: boolean;
+    status: "completed" | "timedOut";
+    instruction: string;
+    detail: string;
+    waitedMs: number;
+}>;
+/**
+ * 敏感操作审批:agent 在执行提交/删除/支付类动作前调用,把审批请求推到实时
+ * 画面面板,挂起等待用户点「允许/拒绝」。超时视为拒绝(fail-closed)。
+ * 用户允许时返回 { decision: "allowed", ... };拒绝/超时**抛错**(消息含原因),
+ * 使 live 调用与 replay/batch 步骤统一按失败处理,agent 不应继续敏感动作。
+ * 决策通过 session.resolveConfirm(面板 POST)写入。
+ */
+export declare function confirmTool(config: BrowserConfig, args: Record<string, any>): Promise<{
+    decision: "allowed";
+    id: string;
+    reason: string;
+    waitedMs: number;
+    detail: string;
 }>;
 /** 断言:条件在 timeoutMs 内成立则通过,否则失败并自动截图存证据。visual 断言走像素比对。 */
 export declare function assertTool(config: BrowserConfig, args: Record<string, any>, exec?: ToolRunContext): Promise<{
