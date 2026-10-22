@@ -5,11 +5,11 @@ import type { Locator, Page } from "playwright-core";
  * 供 targetLocator 及无障碍名称校验在浏览器端(evaluate)执行。
  */
 export declare function extractElementLabel(el: Element): string;
-/** 主流前端组件库激活弹窗/对话框的选择器列表 */
+/** 主流前端组件库激活弹窗/对话框的选择器列表 (从注册表动态聚合，兜底默认值) */
 export declare const ACTIVE_DIALOG_SELECTORS: string;
 /**
  * 获取当前页面上处于活动状态的弹窗容器(Locator)。
- * 兼顾真实 Playwright Locator 与轻量测试 Mock 对象(兼容 .last() 与 .first())。
+ * 优先从 adapterRegistry 动态聚合选择器，兼顾测试 Mock 对象。
  */
 export declare function getActiveDialog(page: Page): Locator;
 //# sourceMappingURL=dom.d.ts.map

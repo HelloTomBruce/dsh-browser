@@ -23,6 +23,7 @@ export interface ExtractField {
  * multiple 收集所有命中;fields 嵌套时在每个命中元素内递归抽取。
  */
 function extractFieldsInPage(fields: ExtractField[]): Record<string, any> {
+  const __name = (t: any, v: any) => t;
   const val = (el: Element | null, attr?: string): string | null => {
     if (el === null) return null;
     if (attr !== undefined && attr !== "" && attr !== "text" && attr !== "textContent") {

@@ -16,7 +16,7 @@ async function main() {
   console.log(`✅ 页面加载成功: "${res.title}" (${res.url})`);
 
   const snap = await snapshotTool(config, { mode: "aria", maxDepth: 3 });
-  console.log("\n📋 ARIA 结构预览:\n", snap.aria?.slice(0, 500) || "(空)");
+  console.log("\n📋 ARIA 结构预览:\n", (snap.tree || snap.aria)?.slice(0, 500) || "(空)");
 
   const shot = await screenshotTool(config, { name: "dev-test.png" });
   console.log(`\n📸 截图已保存至: ${shot.path}`);

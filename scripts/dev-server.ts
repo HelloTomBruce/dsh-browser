@@ -17,7 +17,7 @@ import type { BrowserConfig } from "../src/browser/types.js";
 const config: BrowserConfig = {
   channel: "auto",
   executablePath: "",
-  headless: false,
+  headless: process.env.HEADLESS === "true" ? true : false,
   userDataDir: resolve(".dsh-browser/dev-profile"),
   profiles: {},
   screenshotDir: ".dsh-browser/screenshots",
@@ -66,8 +66,8 @@ async function readJson(req: http.IncomingMessage): Promise<any> {
 }
 
 async function startServer() {
-  const PORT = 9527;
-  const initialUrl = "http://127.0.0.1:7001/#/WirelessPowerSaving/SitePowerSavingDispatch/BasicEnergySaving";
+  const PORT = Number(process.env.PORT) || 9527;
+  const initialUrl = process.argv[2] || process.env.URL || "http://127.0.0.1:5173";
 
   console.log("=================================================");
   console.log("🚀 dsh-browser 完整能力控制器启动中...");
@@ -144,12 +144,12 @@ async function startServer() {
 
         const selector = body.selector;
         if (selector) {
-          const res = await page.locator(selector).first().evaluate((el, { dy, dx }) => {
+          const scrollRes = await page.locator(selector).first().evaluate((el, { dy, dx }) => {
             const before = { top: el.scrollTop, left: el.scrollLeft };
             el.scrollBy({ top: dy, left: dx, behavior: "instant" });
             return { before, after: { top: el.scrollTop, left: el.scrollLeft } };
           }, { dy: deltaY, dx: deltaX });
-          return sendJson(res, 200, { ok: true, target: selector, ...res });
+          return sendJson(res, 200, { ok: true, target: selector, ...scrollRes });
         }
 
         // 默认:物理滚轮 + 自动嗅探内层滚动容器
@@ -186,7 +186,12 @@ async function startServer() {
       if (pathname === "/eval" && req.method === "POST") {
         const body = await readJson(req);
         const script = String(body.script || "");
-        const result = await page.evaluate(new Function("return (" + script + ")()") as any);
+        let result: any;
+        try {
+          result = await page.evaluate(script);
+        } catch {
+          result = await page.evaluate(`(() => { return (${script}); })()`);
+        }
         return sendJson(res, 200, { ok: true, result });
       }
 

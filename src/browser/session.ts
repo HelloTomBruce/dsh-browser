@@ -12,6 +12,7 @@ export * from "./session/screenshot.js";
 
 import { clearPageRefs } from "./session/cache.js";
 import { HUMAN_BINDING, handleHumanEvent, installHumanRecorder } from "./session/recorder.js";
+import { adapterRegistry } from "./adapters/index.js";
 
 /** 当前活动 profile 名(默认 "default")。 */
 export let currentProfile = "default";
@@ -124,6 +125,7 @@ function recordNav(profile: string, url: string): NavEntry {
 export function attachPage(page: Page, config: BrowserConfig): void {
   const timeoutMs = config.timeoutMs ?? 30000;
   page.setDefaultTimeout(timeoutMs);
+  page.addInitScript("window.__name = (t, v) => t; globalThis.__name = (t, v) => t;").catch(() => {});
   page.on("download", (download) => {
     const list = downloadsOf(currentProfile);
     list.push({ download, suggestedFilename: download.suggestedFilename(), at: Date.now() });
@@ -135,6 +137,7 @@ export function attachPage(page: Page, config: BrowserConfig): void {
     if (frame !== page.mainFrame()) return;
     // 导航后旧 ref 全部失效(元素可能已不存在),防 ref 漂移误点。
     clearPageRefs(page);
+    adapterRegistry.clearCache(page);
     const url = frame.url();
     if (!url || url === "about:blank") return;
     recordNav(profile, url);

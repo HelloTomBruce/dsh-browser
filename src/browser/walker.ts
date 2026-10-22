@@ -87,6 +87,18 @@ function __walkerCore() {
       const t = lab?.textContent?.trim();
       if (t) return t.slice(0, 60);
     }
+    const wrapLabel = el.closest("label");
+    if (wrapLabel) {
+      const t = wrapLabel.textContent?.trim();
+      if (t) return t.slice(0, 60);
+    }
+    if (["checkbox", "radio", "switch"].includes(role)) {
+      const container = el.closest("label, [class*='wrapper'], [class*='item'], li");
+      if (container) {
+        const t = container.textContent?.trim();
+        if (t) return t.replace(/\s+/g, " ").slice(0, 60);
+      }
+    }
     if (["textbox", "searchbox", "combobox", "spinbutton"].includes(role)) {
       const ph = el.getAttribute("placeholder");
       if (ph && ph.trim()) return ph.trim().slice(0, 60);
