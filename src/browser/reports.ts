@@ -39,7 +39,7 @@ export interface RunRecord {
 }
 
 /** 报告存储目录($DSH_HOME/.dsh-browser/reports)。 */
-export function reportsDir(): string {
+function reportsDir(): string {
   const home = process.env.DSH_HOME || join(homedir(), ".dsh");
   return join(home, ".dsh-browser", "reports");
 }

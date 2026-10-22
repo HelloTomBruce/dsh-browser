@@ -13,7 +13,7 @@ export function urlPath(req: IncomingMessage): string {
 }
 
 /** Read the request body as a UTF-8 string (bounded). */
-export function readRawBody(req: IncomingMessage, limitBytes = 1_000_000): Promise<string> {
+function readRawBody(req: IncomingMessage, limitBytes = 1_000_000): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;

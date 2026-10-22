@@ -1,17 +1,14 @@
 /**
  * dsh-browser-view client half:
- * 1. "settings.section" -> A "🌐 浏览器" page in the official dsh settings
- *    dialog managing saved browser recordings with polished header & icon.
- * 2. "shell.overlay" -> Universal floating widget (FAB + live screenshot
- *    thumbnail panel + full-size inspection modal) rendered natively in both
- *    Electron desktop and web client.
+ * 1. "settings.section" -> A "🌐 浏览器" page in official dsh settings dialog.
+ * 2. "shell.overlay" -> Universal floating widget (FAB + live screenshot + modal).
  */
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client';
-declare module '@deepseek-ai/dsh-client-ui-slots' {
+import type { ClientContext } from "@deepseek-ai/dsh-client-runtime/client";
+declare module "@deepseek-ai/dsh-client-ui-slots" {
     interface SlotMap {
-        'shell.overlay': {
-            kind: 'list';
-            scope: 'root';
+        "shell.overlay": {
+            kind: "list";
+            scope: "root";
         };
     }
 }

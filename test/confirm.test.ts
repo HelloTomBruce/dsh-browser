@@ -68,7 +68,7 @@ describe("confirmTool", () => {
     while (getPendingConfirm() === null && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 20));
     }
-    const oldId = getPendingConfirm()!.id;
+    const _oldId = getPendingConfirm()!.id;
     // 模拟被新的审批取代(直接覆盖 pending)
     setPendingConfirm({ id: "cfm-new", reason: "新请求", startedAt: Date.now() });
     await expect(p).rejects.toThrow(/已被新的审批取代/);

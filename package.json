@@ -27,8 +27,13 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && tsdown",
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false && tsc -p tsconfig.test.json --noEmit --pretty false",
+    "lint": "biome check src test",
+    "format": "biome format --write src test",
     "test": "vitest run",
-    "verify": "npm run typecheck && npm run test && npm run build",
+    "dev:test": "tsx scripts/dev-test.ts",
+    "dev:login": "tsx scripts/login-wait.ts",
+    "dev:server": "tsx scripts/dev-server.ts",
+    "verify": "npm run typecheck && npm run lint && npm run test && npm run build",
     "prepublishOnly": "npm run verify"
   },
   "repository": {
@@ -56,9 +61,11 @@
     "playwright-core": "^1.49.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
     "@types/node": "^22.0.0",
     "@types/react": "^18.2.0",
     "tsdown": "^0.22.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.2",
     "vitest": "^3.0.0"
   },

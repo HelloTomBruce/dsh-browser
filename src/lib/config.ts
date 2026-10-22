@@ -13,8 +13,6 @@ export interface FieldSchema {
 
 export type ConfigSchema = Record<string, FieldSchema>;
 
-const TYPES = ["string", "number", "boolean", "array", "object", "string[]", "any"];
-
 function typeOf(value: unknown): string {
   if (value === null) return "null";
   if (Array.isArray(value)) return "array";
@@ -74,5 +72,3 @@ export function resolveConfig(
   }
   return config;
 }
-
-export { TYPES };

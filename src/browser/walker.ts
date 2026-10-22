@@ -171,6 +171,6 @@ const CORE_SRC = __walkerCore.toString();
  * 拼装发生在模块加载期(new Function 一次性),调用期零开销。
  */
 export function injectWalker<P, R>(entry: (payload: P, w: WalkerApi) => R): (payload: P) => R {
-  const src = `"use strict"; return function (payload) { const w = (${CORE_SRC})(); return (${entry.toString()})(payload, w); };`;
+  const src = `"use strict"; return function (payload) { var __name = (t, v) => t; const w = (${CORE_SRC})(); return (${entry.toString()})(payload, w); };`;
   return new Function(src)() as (payload: P) => R;
 }

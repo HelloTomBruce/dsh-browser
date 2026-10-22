@@ -1,1 +1,4 @@
 node_modules
+.dsh-browser
+*.log
+.DS_Store

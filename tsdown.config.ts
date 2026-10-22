@@ -27,7 +27,9 @@ const node: UserConfig = {
   clean: false,
   // dsh host packages are runtime-provided by the loader (linked into the
   // profile by `dsh plugin add`); never bundle them into the node half.
-  external: [/^@deepseek-ai\//],
+  deps: {
+    neverBundle: [/^@deepseek-ai\//],
+  },
 };
 
 const client: UserConfig = {
@@ -40,8 +42,10 @@ const client: UserConfig = {
   sourcemap: true,
   minify: true,
   clean: false,
-  external: CLIENT_EXTERNALS,
-  noExternal: (id) => (CLIENT_EXTERNALS.includes(id) ? undefined : true),
+  deps: {
+    neverBundle: CLIENT_EXTERNALS,
+    alwaysBundle: (id) => (CLIENT_EXTERNALS.includes(id) ? undefined : true),
+  },
   outputOptions: {
     entryFileNames: "client.js",
     banner: `window.__ModuleLoader__.load({ id: "dsh-browser-view", factory: (require) => {`,

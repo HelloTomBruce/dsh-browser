@@ -2,12 +2,13 @@
 //
 // 一个插件行提供两件事:
 //   1. 共享 Playwright 浏览器自动化:22 个 browser_* 工具(agent 调用);
-//   2. 原生界面实时画面面板:webServer.tapIndex 注入右下角悬浮面板,
+//   2. 原生界面实时画面面板:client 插件注入右下角悬浮面板与设置项,
 //      状态行 + 缩略图,点开大屏模态框(2 秒轮询实时画面 + 访问历史)。
 //
 // 零 @deepseek-ai 运行时依赖:通过 cordis 上下文字符串键鸭子类型访问
 // tools / systemPrompt / webServer,最大版本宽容度。
 
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ReefContext } from "./lib/types.js";
 import { resolveConfig, type ConfigSchema } from "./lib/config.js";
 import { sendJson } from "./lib/http.js";
@@ -17,7 +18,6 @@ import { setDoctorProbe } from "./browser/tools.js";
 import { closeBrowser, sweepScreenshotDir } from "./browser/session.js";
 import { loadRecordings } from "./browser/recordings.js";
 import type { BrowserConfig } from "./browser/types.js";
-import { applyEmbed } from "./embed.js";
 
 export const name = "dsh-browser-view";
 // 不声明任何硬性 inject:本插件的两个消费面分布在不同进程——
@@ -126,14 +126,12 @@ export function apply(ctx: ReefContext, rawConfig: Record<string, any>) {
   // 2) 实时画面数据 API(/status /screenshot /history)。
   registerBrowserApi(ctx, config, base);
 
-  // 3) 原生面板嵌入(tapIndex 注入)。
+  // 3) 自检探针与配置发现(若 webServer 存在则绑定端口状态探针与配置端点)。
   const webServer = ctx.get<{
     register(route: import("./lib/types.js").WebRoute): () => void;
-    tapIndex(transform: (html: string) => string): () => void;
     port?: number;
   }>("webServer");
   if (webServer !== undefined) {
-    applyEmbed(ctx, webServer, base);
     // browser_doctor 面板自检探针:fetch 本机 /status(webServer 有 port 时)。
     const port = webServer.port;
     setDoctorProbe(
@@ -161,7 +159,7 @@ export function apply(ctx: ReefContext, rawConfig: Record<string, any>) {
     const disposeConfig = webServer.register({
       kind: "exact",
       path: "/__dsh-browser-view__/config",
-      handler: (_req, res) => {
+      handler: (_req: IncomingMessage, res: ServerResponse) => {
         sendJson(res, 200, { basePath: base });
       },
     });

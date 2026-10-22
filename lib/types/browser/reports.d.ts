@@ -30,8 +30,6 @@ export interface RunRecord {
     retryOf?: string;
     results: RunStepResult[];
 }
-/** 报告存储目录($DSH_HOME/.dsh-browser/reports)。 */
-export declare function reportsDir(): string;
 /** 生成 runId:YYYYMMDD-HHmmss-随机4位。 */
 export declare function makeRunId(ts: number): string;
 /** 追加一条运行记录;超限时截断旧行(原子替换)。 */
