@@ -135,6 +135,54 @@ async function startServer() {
         return sendJson(res, 200, selRes);
       }
 
+      if (pathname === "/scroll" && req.method === "POST") {
+        const body = await readJson(req);
+        const deltaX = Number(body.deltaX ?? 0);
+        let deltaY = Number(body.deltaY ?? 500);
+        if (body.direction === "up") deltaY = -Math.abs(deltaY);
+        else if (body.direction === "down") deltaY = Math.abs(deltaY);
+
+        const selector = body.selector;
+        if (selector) {
+          const res = await page.locator(selector).first().evaluate((el, { dy, dx }) => {
+            const before = { top: el.scrollTop, left: el.scrollLeft };
+            el.scrollBy({ top: dy, left: dx, behavior: "instant" });
+            return { before, after: { top: el.scrollTop, left: el.scrollLeft } };
+          }, { dy: deltaY, dx: deltaX });
+          return sendJson(res, 200, { ok: true, target: selector, ...res });
+        }
+
+        // 默认:物理滚轮 + 自动嗅探内层滚动容器
+        await page.mouse.move(600, 400);
+        await page.mouse.wheel(deltaX, deltaY);
+        await page.waitForTimeout(300);
+
+        // 如果物理滚轮未使容器滚动(部分无头或特殊内联 overflow),自动兜底滚动页面主容器
+        const metrics = await page.evaluate(({ dy }) => {
+          let container = document.querySelector(".page-content") as HTMLElement | null;
+          if (!container || container.scrollHeight <= container.clientHeight) {
+            const all = Array.from(document.querySelectorAll("*")) as HTMLElement[];
+            container = all.find((el) => {
+              const cs = window.getComputedStyle(el);
+              return (cs.overflowY === "auto" || cs.overflowY === "scroll") && el.scrollHeight > el.clientHeight;
+            }) || (document.scrollingElement as HTMLElement) || document.documentElement;
+          }
+          const before = container.scrollTop;
+          if (before === 0 && dy > 0) {
+            container.scrollBy({ top: dy, behavior: "instant" });
+          }
+          return {
+            containerTag: container.tagName,
+            containerClass: container.className,
+            scrollTop: container.scrollTop,
+            scrollHeight: container.scrollHeight,
+            clientHeight: container.clientHeight,
+          };
+        }, { dy: deltaY });
+
+        return sendJson(res, 200, { ok: true, metrics });
+      }
+
       if (pathname === "/eval" && req.method === "POST") {
         const body = await readJson(req);
         const script = String(body.script || "");

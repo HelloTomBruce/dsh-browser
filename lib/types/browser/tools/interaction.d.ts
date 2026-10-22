@@ -25,9 +25,8 @@ export declare function pressTool(config: BrowserConfig, args: Record<string, an
     pressed: string;
 }>;
 /**
- * 下拉选择原语:原生 <select> 走 selectOption;组件库下拉(antd/element/listbox)
- * 走「点击触发框 → 等待可见选项 → 按文本点击」。找不到选项时抛出错误并附当前可见
- * 选项清单,agent 可直接据此修正,无需再手写 eval 探查。
+ * 下拉选择原语:委托给 UI 组件库下拉适配器(Native / AntDesign / ElementPlus / GenericARIA)。
+ * 各组件库特异性的展开机制、虚拟列表穿透与 0 宽度读屏傀儡节点过滤完全隔离在适配器中。
  */
 export declare function selectTool(config: BrowserConfig, args: Record<string, any>): Promise<{
     url: string;
