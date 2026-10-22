@@ -4,6 +4,7 @@ export * from "./session/cache.js";
 export * from "./session/collaboration.js";
 export * from "./session/recorder.js";
 export * from "./session/screenshot.js";
+export * from "./session/target.js";
 /** 当前活动 profile 名(默认 "default")。 */
 export declare let currentProfile: string;
 /** 多配置文件浏览器会话:name → 会话状态。 */

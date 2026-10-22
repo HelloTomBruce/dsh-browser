@@ -8,7 +8,7 @@ import {
   screenshotTool, waitTool, backTool, reloadTool,
   statusTool, closeTool, tabsTool, downloadTool, uploadTool, cookiesTool, formTool, formSaveTool, formsTool, profileTool, contextTool, doctorTool,
   elementsTool, waitForLoginTool, pauseForHumanTool, confirmTool,
-  findTool, waitForTool, assertTool, networkTool, recordTool, replayTool, batchTool, extractTool,
+  findTool, waitForTool, assertTool, networkTool, recordTool, replayTool, batchTool, extractTool, formFillTool,
   captureSelectorHint, SELECTOR_STEP_TOOLS, previewHighlight,
   confirmGate, setRerunHandler,
 } from "./tools.js";
@@ -31,7 +31,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
   /** 会触发真实 DOM 事件的 agent 工具:执行前后打点,混合录制时用于区分人手与工具回声。 */
   const AGENT_DOM_TOOLS = new Set([
     "browser_click", "browser_type", "browser_select", "browser_press",
-    "browser_upload", "browser_form", "browser_eval",
+    "browser_upload", "browser_form", "browser_form_fill", "browser_eval",
   ]);
 
   /** 操作预告:这些工具执行前把目标元素在实时画面上高亮(异步不阻塞)。 */
@@ -139,6 +139,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     browser_form: (a) => formTool(config, a),
     browser_form_save: (a) => formSaveTool(a),
     browser_forms: (a) => formsTool(a),
+    browser_form_fill: (a) => formFillTool(config, a),
     browser_profile: (a) => profileTool(config, a),
     browser_elements: (a) => elementsTool(config, a),
     browser_wait_for_login: (a) => waitForLoginTool(config, a),

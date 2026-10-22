@@ -140,6 +140,20 @@ function __walkerCore() {
     return style.visibility !== "hidden" && style.display !== "none";
   }
 
+  /** 纯只读几何判定: 元素是否在当前视口可见区域内(含可选边距扩展)。 */
+  function isElementInViewport(el: Element, padding = 0): boolean {
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return false;
+    const winHeight = window.innerHeight || document.documentElement.clientHeight;
+    const winWidth = window.innerWidth || document.documentElement.clientWidth;
+    return (
+      rect.bottom >= -padding &&
+      rect.right >= -padding &&
+      rect.top <= winHeight + padding &&
+      rect.left <= winWidth + padding
+    );
+  }
+
   /**
    * 统一元素描述结构(F5 顺带统一):aria 快照 ref、find 匹配、
    * 拾取指纹(pick hint)、录制回声(recorder payload)共用同一份字段语义。
@@ -168,7 +182,7 @@ function __walkerCore() {
     };
   }
 
-  return { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible, describeElement };
+  return { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible, isElementInViewport, describeElement };
 }
 
 /** walker 核心注入后暴露给 entry 的 API(类型层)。 */

@@ -4,6 +4,7 @@ import type { Page } from "playwright-core";
 import { withTimeout } from "../tools/common.js";
 import { waitForDOMQuiescence } from "./quiescence.js";
 import type {
+  FormFieldItem,
   QuiescenceOptions,
   SelectContext,
   SelectResult,
@@ -131,5 +132,60 @@ export class GenericAdapter implements UIAdapter {
 
   async waitForQuiescence(page: Page, options?: QuiescenceOptions): Promise<boolean> {
     return waitForDOMQuiescence(page, options);
+  }
+
+  async fillFormField(
+    page: Page,
+    field: FormFieldItem,
+    scope?: string,
+  ): Promise<{ handled: boolean; error?: string }> {
+    const root = scope ? page.locator(scope) : page;
+    const { key, value } = field;
+
+    // 1. 尝试直接作为 CSS selector
+    try {
+      const loc = root.locator(key).first();
+      if ((await loc.count()) > 0) {
+        const tag = await loc.evaluate((el) => el.tagName.toLowerCase()).catch(() => "");
+        const type = await loc.getAttribute("type").catch(() => "");
+        if (tag === "select") {
+          await loc.selectOption({ label: String(value) });
+          return { handled: true };
+        }
+        if (type === "checkbox") {
+          const checked = await loc.isChecked();
+          if (Boolean(value) !== checked) await loc.click();
+          return { handled: true };
+        }
+        await loc.fill(String(value));
+        return { handled: true };
+      }
+    } catch {
+      // 不是合法 selector，继续走 label 检索
+    }
+
+    // 2. 尝试根据 label / placeholder / getByLabel 定位
+    try {
+      const byLabel = root.getByLabel(key, { exact: false }).first();
+      if ((await byLabel.count()) > 0) {
+        const tag = await byLabel.evaluate((el) => el.tagName.toLowerCase()).catch(() => "");
+        if (tag === "select") {
+          await byLabel.selectOption({ label: String(value) });
+        } else {
+          await byLabel.fill(String(value));
+        }
+        return { handled: true };
+      }
+
+      const byPlaceholder = root.getByPlaceholder(key, { exact: false }).first();
+      if ((await byPlaceholder.count()) > 0) {
+        await byPlaceholder.fill(String(value));
+        return { handled: true };
+      }
+    } catch (e: any) {
+      return { handled: false, error: e.message };
+    }
+
+    return { handled: false };
   }
 }

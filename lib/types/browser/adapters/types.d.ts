@@ -68,6 +68,18 @@ export interface SelectContext {
 export interface SelectResult {
     selected: string;
 }
+/** 单个表单项填充参数 */
+export interface FormFieldItem {
+    key: string;
+    value: any;
+}
+/** 批量表单填充汇总结果 */
+export interface FormFillResult {
+    filled: string[];
+    skipped: string[];
+    errors: Record<string, string>;
+    submitted?: boolean;
+}
 /**
  * 统一组件库适配器接口 (Pluggable UI Adapter)
  */
@@ -91,5 +103,12 @@ export interface UIAdapter {
     matchesSelect?(ctx: SelectContext): Promise<boolean>;
     /** 执行下拉/浮层选择 */
     selectOption?(ctx: SelectContext): Promise<SelectResult>;
+    /**
+     * 组件库特异性表单字段填充 (如 AntD a-form-item、Checkbox、DatePicker 等)
+     */
+    fillFormField?(page: Page, field: FormFieldItem, scope?: string): Promise<{
+        handled: boolean;
+        error?: string;
+    }>;
 }
 //# sourceMappingURL=types.d.ts.map

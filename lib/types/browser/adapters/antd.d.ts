@@ -1,5 +1,5 @@
 import type { Locator, Page } from "playwright-core";
-import type { ActionContext, ActionResult, QuiescenceOptions, SelectContext, SelectResult, UIAdapter } from "./types.js";
+import type { ActionContext, ActionResult, FormFieldItem, QuiescenceOptions, SelectContext, SelectResult, UIAdapter } from "./types.js";
 export declare class AntDesignAdapter implements UIAdapter {
     readonly name = "ant-design";
     /** 活动弹窗/抽屉选择器 */
@@ -23,5 +23,10 @@ export declare class AntDesignAdapter implements UIAdapter {
     matchesSelect(ctx: SelectContext): Promise<boolean>;
     /** 执行 Ant Design 下拉选择 */
     selectOption(ctx: SelectContext): Promise<SelectResult>;
+    /** Ant Design 表单项精准识别与填充 */
+    fillFormField(page: Page, field: FormFieldItem, scope?: string): Promise<{
+        handled: boolean;
+        error?: string;
+    }>;
 }
 //# sourceMappingURL=antd.d.ts.map

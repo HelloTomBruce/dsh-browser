@@ -5,6 +5,7 @@ import { closeBrowser, getPage } from "../src/browser/session.js";
 import {
   clickTool,
   findTool,
+  formFillTool,
   networkTool,
   openTool,
   screenshotTool,
@@ -135,6 +136,12 @@ async function startServer() {
         return sendJson(res, 200, selRes);
       }
 
+      if (pathname === "/fill" && req.method === "POST") {
+        const body = await readJson(req);
+        const fillRes = await formFillTool(config, body);
+        return sendJson(res, 200, fillRes);
+      }
+
       if (pathname === "/scroll" && req.method === "POST") {
         const body = await readJson(req);
         const deltaX = Number(body.deltaX ?? 0);
@@ -219,8 +226,16 @@ async function startServer() {
     }
   });
 
-  server.listen(PORT, () => {
+  server.listen(PORT, async () => {
     console.log(`✅ 完整能力控制器就绪 (http://127.0.0.1:${PORT})`);
+    const initialUrl = process.env.URL || "http://127.0.0.1:5173";
+    console.log(`🌐 正在打开真实浏览器窗口: ${initialUrl} (headless: ${config.headless})`);
+    try {
+      await openTool(config, { url: initialUrl });
+      console.log(`🎉 真实浏览器窗口已就绪！`);
+    } catch (e: any) {
+      console.warn(`浏览器打开提示: ${e.message}`);
+    }
   });
 }
 

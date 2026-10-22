@@ -8,103 +8,17 @@ import {
   getPage, activePage, pageRef, pageIdentity,
   savedForms, lastFormFields, setLastFormFields,
   downloadsOf, currentProfile,
+  targetLocator, resolveTargetLocator,
 } from "../session.js";
 import { workspaceBaseDir } from "../../lib/tools.js";
 import { withTimeout, unwrapDoubleEncodedScript, workspaceFilePath } from "./common.js";
 import { executeSelectAdapter } from "../adapters/select.js";
 import { extractElementLabel, getActiveDialog } from "../adapters/dom.js";
 import { adapterRegistry } from "../adapters/index.js";
+import { waitForDOMQuiescence } from "../adapters/quiescence.js";
+import type { FormFillResult } from "../adapters/types.js";
 
-
-
-/**
- * 解析点击/输入目标为 Locator:selector 直译;ref 走注册表——
- * 先试快照时的 CSS 路径并校验 role/name 仍一致(防 ref 漂移误点),
- * 不一致则降级 getByRole(role, {name}),均失败报「ref 已失效」。
- */
-export async function targetLocator(page: Page, args: Record<string, any>): Promise<Locator> {
-  if (args.ref !== undefined && args.ref !== "") {
-    const ref = String(args.ref);
-    const entry = pageRef(page, ref);
-    if (entry === undefined) {
-      throw new Error(
-        `未知 ref: ${ref}(页面导航或重新快照后旧 ref 失效;请先 browser_snapshot { mode: "aria" })`,
-      );
-    }
-    const byPath = page.locator(entry.selector).first();
-    if ((await withTimeout(byPath.count(), 3_000, "解析 ref 路径").catch(() => 0)) > 0) {
-      const ok = await withTimeout(
-        byPath
-          .evaluate((el, { role, name, labelScript }) => {
-          const tag = el.tagName.toLowerCase();
-          const type = (el.getAttribute("type") ?? "").toLowerCase();
-          const roleAttr = (el.getAttribute("role") ?? "").trim().split(/\s+/)[0] ?? "";
-          const roleOk =
-            role === "" ||
-            roleAttr === role ||
-            (role === "link" && tag === "a") ||
-            (role === "button" &&
-              (tag === "button" || tag === "summary" || (tag === "input" && ["button", "submit", "reset", "image"].includes(type)))) ||
-            (["textbox", "searchbox"].includes(role) && (tag === "textarea" || (tag === "input" && !["hidden", "checkbox", "radio"].includes(type)))) ||
-            (role === "combobox" && tag === "select") ||
-            (role === "checkbox" && tag === "input" && type === "checkbox") ||
-            (role === "radio" && tag === "input" && type === "radio");
-          const aria = el.getAttribute("aria-label") ?? "";
-          const ph = el.getAttribute("placeholder") ?? "";
-          const title = el.getAttribute("title") ?? "";
-          const text = ((el as HTMLElement).innerText || el.textContent || "").trim().replace(/\s+/g, " ");
-
-          let labelText = "";
-          try {
-            const labelFn = new Function("el", "return (" + labelScript + ")(el);");
-            labelText = String(labelFn(el) || "");
-          } catch {
-            /* ignore */
-          }
-
-          const nameOk =
-            name === "" ||
-            aria.includes(name) ||
-            ph.includes(name) ||
-            title.includes(name) ||
-            text.includes(name) ||
-            labelText.includes(name);
-          return roleOk && nameOk;
-        }, { role: entry.role, name: entry.name, labelScript: extractElementLabel.toString() }),
-        3_000,
-        "校验 ref 元素",
-      ).catch(() => false);
-      if (ok) return byPath;
-    }
-    // 降级:委托给 UI 适配器感知当前处于激活状态的 Modal 弹窗,优先在弹窗容器内检索,防穿透点到底层遮挡元素
-    try {
-      const activeDialog = getActiveDialog(page);
-      if (activeDialog && typeof activeDialog.getByRole === "function") {
-        const inDialog =
-          entry.name !== ""
-            ? activeDialog.getByRole(entry.role as any, { name: entry.name }).first()
-            : activeDialog.getByRole(entry.role as any).first();
-        if ((await withTimeout(inDialog.count(), 1_000, "弹窗内 role 查找").catch(() => 0)) > 0) {
-          return inDialog;
-        }
-      }
-    } catch {
-      // 容错处理
-    }
-
-    // 默认降级:role + name
-    const byRole =
-      entry.name !== ""
-        ? page.getByRole(entry.role as any, { name: entry.name }).first()
-        : page.getByRole(entry.role as any).first();
-    if ((await withTimeout(byRole.count(), 3_000, "解析 ref role 降级").catch(() => 0)) > 0) return byRole;
-    throw new Error(
-      `ref ${ref} 已失效(元素不存在或内容已变化);请重新 browser_snapshot { mode: "aria" }`,
-    );
-  }
-  if (args.selector === undefined) throw new Error("需要 selector 或 ref 之一");
-  return page.locator(String(args.selector)).first();
-}
+export { targetLocator, resolveTargetLocator };
 
 export async function clickTool(config: BrowserConfig, args: Record<string, any>) {
   const page = await getPage(config);
@@ -399,4 +313,72 @@ export async function formsTool(args: Record<string, any>) {
     return { deleted: existed, name: String(args.name) };
   }
   throw new Error(`unknown forms action: ${action}`);
+}
+
+/**
+ * 智能批量表单填写: 一次调用自动识别并填充多个表单控件, 结合 UI 适配器自动处理输入/选择与弹层
+ */
+export async function formFillTool(
+  config: BrowserConfig,
+  args: Record<string, any>,
+): Promise<FormFillResult> {
+  const fields = args.fields;
+  if (!fields || typeof fields !== "object" || Object.keys(fields).length === 0) {
+    throw new Error("缺少 fields 参数: 需提供包含表单键值对的对象");
+  }
+
+  const page = await getPage(config);
+  const scope = typeof args.scope === "string" && args.scope ? args.scope : undefined;
+  const filled: string[] = [];
+  const skipped: string[] = [];
+  const errors: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(fields)) {
+    try {
+      const res = await adapterRegistry.fillFormField(page, { key, value }, scope);
+      if (res.handled) {
+        filled.push(key);
+        // 轻量稳态等待，保证联动校验和级联渲染平稳完成
+        await waitForDOMQuiescence(page, { quietMs: 60, maxTimeoutMs: 1500 }).catch(() => {});
+      } else {
+        skipped.push(key);
+        if (res.error) errors[key] = res.error;
+      }
+    } catch (e: any) {
+      skipped.push(key);
+      errors[key] = e.message || String(e);
+    }
+  }
+
+  let submitted: boolean | undefined = undefined;
+  if (args.submitButton) {
+    try {
+      const submitTarget = typeof args.submitButton === "string" ? args.submitButton : "提交";
+      let btnLocator: Locator;
+      try {
+        const resolved = await resolveTargetLocator(page, { selector: submitTarget });
+        if ((await resolved.locator.count()) > 0) {
+          btnLocator = resolved.locator;
+        } else {
+          btnLocator = page.getByRole("button", { name: submitTarget }).first();
+        }
+      } catch {
+        btnLocator = page.getByRole("button", { name: submitTarget }).first();
+      }
+
+      await btnLocator.click({ timeout: args.timeoutMs ?? 5000 });
+      submitted = true;
+      await waitForDOMQuiescence(page, { quietMs: 80, maxTimeoutMs: 2000 }).catch(() => {});
+    } catch (e: any) {
+      submitted = false;
+      errors["__submit__"] = `提交按钮点击失败: ${e.message}`;
+    }
+  }
+
+  return {
+    filled,
+    skipped,
+    errors,
+    ...(submitted !== undefined ? { submitted } : {}),
+  };
 }

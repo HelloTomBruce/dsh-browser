@@ -7,6 +7,7 @@ declare function __walkerCore(): {
     nameOf: (el: Element, role: string) => string;
     cssPath: (el: Element) => string;
     isVisible: (el: Element) => boolean;
+    isElementInViewport: (el: Element, padding?: number) => boolean;
     describeElement: (el: Element) => {
         role: string;
         name: string;

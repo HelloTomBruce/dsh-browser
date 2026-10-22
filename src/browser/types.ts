@@ -1,5 +1,5 @@
 // dsh-browser · 浏览器 — 类型定义
-import type { Browser, BrowserContext, Page } from "playwright-core";
+import type { Browser, BrowserContext, Frame, Locator, Page } from "playwright-core";
 
 export interface BrowserConfig {
   enabled?: boolean;
@@ -111,6 +111,22 @@ export interface RefEntry {
   name: string;
   /** 生成快照时计算的稳定 CSS 路径(优先 #id / [data-testid] / nth-of-type 链)。 */
   selector: string;
+  /** 元素所在 Frame 的全局索引(0 为主 Frame, >=1 为子 Frame)。 */
+  frameIndex?: number;
+  /** 元素所在 Frame 的当前 URL(用于导航防漂移二次校验)。 */
+  frameUrl?: string;
+}
+
+/** 统一目标定位解析结果(无论在主 Frame 还是子 Frame 均可统一操作)。 */
+export interface TargetResolution {
+  /** 绑定的 Playwright Locator 实例。 */
+  locator: Locator;
+  /** 执行上下文容器(主页面 Page 或子 Frame)。 */
+  container: Page | Frame;
+  /** 原始 RefEntry 元数据(仅 ref 定位时有效)。 */
+  entry?: RefEntry;
+  /** 是否位于子 Frame 中。 */
+  isIFrame: boolean;
 }
 
 /** 录制时采集的选择器指纹(回放自愈的降级候选来源)。 */

@@ -6,6 +6,7 @@ import { GenericAdapter } from "./generic.js";
 import type {
   ActionContext,
   ActionResult,
+  FormFieldItem,
   SelectContext,
   SelectResult,
   UIAdapter,
@@ -123,6 +124,29 @@ class UIAdapterRegistryImpl {
     if (adapter.actionInterceptor?.onActionError) {
       return adapter.actionInterceptor.onActionError(ctx, error);
     }
+  }
+
+  /**
+   * 表单项智能填充调度：
+   * 优先尝试当前匹配的 UI 框架特异性适配器，若未处理则交由通用适配器兜底
+   */
+  async fillFormField(
+    page: Page,
+    field: FormFieldItem,
+    scope?: string,
+  ): Promise<{ handled: boolean; error?: string }> {
+    const active = await this.getActiveAdapter(page);
+    if (active.fillFormField) {
+      const res = await active.fillFormField(page, field, scope);
+      if (res.handled) return res;
+    }
+
+    const generic = this.adapters.get("generic");
+    if (generic?.fillFormField) {
+      return await generic.fillFormField(page, field, scope);
+    }
+
+    return { handled: false, error: "未找到能处理该字段的适配器" };
   }
 }
 

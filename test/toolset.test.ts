@@ -22,16 +22,16 @@ function captureTools(config: BrowserConfig): Map<string, PlainToolDefinition> {
 const BASE: BrowserConfig = { channel: "auto", headless: true, timeoutMs: 5000 };
 
 describe("toolset 披露", () => {
-  it("默认(不配置)= all:注册全部 36 个,与现状零差异", () => {
+  it("默认(不配置)= all:注册全部 37 个,与现状零差异", () => {
     const tools = captureTools({ ...BASE });
-    expect(tools.size).toBe(36);
+    expect(tools.size).toBe(37);
     expect(tools.has("browser_record")).toBe(true);
     expect(tools.has("browser_replay")).toBe(true);
   });
 
   it('toolset: "all" 显式配置同样全量', () => {
     const tools = captureTools({ ...BASE, toolset: "all" });
-    expect(tools.size).toBe(36);
+    expect(tools.size).toBe(37);
   });
 
   it('toolset: "core":只注册核心集,低频工具不注册', () => {

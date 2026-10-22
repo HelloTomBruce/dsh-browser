@@ -17,14 +17,16 @@ export function getRecorderTools(
       parameters: {
         type: "object",
         properties: {
-          action: { type: "string", enum: ["start", "stop", "save", "list", "delete"], description: "默认 start。" },
-          name: { type: "string", description: "save/delete 时的录制名。" },
+          action: { type: "string", enum: ["start", "stop", "save", "list", "delete", "export"], description: "默认 start。" },
+          name: { type: "string", description: "save/delete/export 时的录制名。" },
           stripReads: { type: "boolean", description: "save 时剔除只读步骤(snapshot/elements/eval/network/status/cookies list),默认 false。" },
           includeFailed: { type: "boolean", description: "save 时保留失败的实验步骤(默认剔除:超时/无效 selector 的步骤回放必然再次失败并卡住回放)。" },
           vars: {
             type: "object",
             description: "save 时参数化:{ 变量名: \"#步骤号.args.字段\" }(步骤号 1 起),该字段值替换为 {{变量名}} 占位符;replay 时用 vars 传入真实值。",
           },
+          format: { type: "string", enum: ["playwright"], description: "export 时的目标格式, 默认 playwright。" },
+          exportPath: { type: "string", description: "export 时的输出文件路径(相对工作区)。" },
         },
         additionalProperties: false,
       },
@@ -45,6 +47,10 @@ export function getRecorderTools(
           deleted: { type: "boolean" },
           name: { type: "string" },
           hint: { type: "string" },
+          exported: { type: "boolean" },
+          format: { type: "string" },
+          path: { type: "string" },
+          code: { type: "string" },
         },
         required: [],
       },
@@ -58,10 +64,13 @@ export function getRecorderTools(
           return `已保存录制 "${value.saved}"(${value.steps} 步,来源: ${value.source === "recording" ? "start→stop 录制" : "最近操作轨迹"})${stripped}${vars}${warn}`;
         }
         if (args.action === "delete") return value.deleted ? `已删除 "${value.name}"` : `无此录制 "${value.name}"`;
+        if (args.action === "export") {
+          return value.path ? `已导出 Playwright 规范测试用例: ${value.path}` : `已生成 Playwright 规范测试代码:\n${value.code}`;
+        }
         return (value.recordings ?? []).map((r: any) => `"${r.name}"(${r.steps} 步): ${r.preview}`).join("\n") || "(无录制)";
       },
       timeoutMs: timeout(),
-      execute: (args) => recordTool(args),
+      execute: (args, exec) => recordTool(args, config, exec),
     }),
     definePlainTool({
       name: "browser_replay",

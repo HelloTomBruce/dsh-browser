@@ -1,5 +1,5 @@
 import type { Page } from "playwright-core";
-import type { ActionContext, ActionResult, SelectContext, SelectResult, UIAdapter } from "./types.js";
+import type { ActionContext, ActionResult, FormFieldItem, SelectContext, SelectResult, UIAdapter } from "./types.js";
 declare class UIAdapterRegistryImpl {
     private adapters;
     private pageAdapterCache;
@@ -33,6 +33,14 @@ declare class UIAdapterRegistryImpl {
      * 动作异常自愈管道 (处理遮罩层、阻挡重试等)
      */
     onActionError(ctx: ActionContext, error: Error): Promise<ActionResult | void>;
+    /**
+     * 表单项智能填充调度：
+     * 优先尝试当前匹配的 UI 框架特异性适配器，若未处理则交由通用适配器兜底
+     */
+    fillFormField(page: Page, field: FormFieldItem, scope?: string): Promise<{
+        handled: boolean;
+        error?: string;
+    }>;
 }
 export declare const adapterRegistry: UIAdapterRegistryImpl;
 export {};

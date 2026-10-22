@@ -75,6 +75,12 @@ export declare function screenshotTool(config: BrowserConfig, args: Record<strin
     height: number;
     baseline: string;
 } | {
+    som?: boolean | undefined;
+    somMarks?: {
+        id: number;
+        role: string;
+        name: string;
+    }[] | undefined;
     path: string;
     bytes: number;
     width: number;

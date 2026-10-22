@@ -346,6 +346,83 @@
                 <a-button type="primary" :disabled="currentStep === 3" @click="currentStep++">下一步</a-button>
               </div>
             </a-tab-pane>
+
+            <!-- TAB 5: v0.5.0 专项场景 (IFrame / 视口过滤 / 批量填表 / SoM) -->
+            <a-tab-pane key="tab5" tab="v0.5.0 核心能力专项回归">
+              <a-row :gutter="24">
+                <!-- 模块 A: 跨 Frame 嵌套 -->
+                <a-col :span="12">
+                  <a-card title="🌐 场景 1: 跨 Frame / IFrame 隔离测试" style="margin-bottom: 24px;">
+                    <p style="color: #666; font-size: 13px;">
+                      下方嵌入独立的子 Frame。验证主机端树合成能否识别 <code>[ref=f1:...]</code> 并执行交互。
+                    </p>
+                    <iframe
+                      id="test-sub-iframe"
+                      src="/iframe-subpage.html"
+                      style="width: 100%; height: 230px; border: 1px dashed #1890ff; border-radius: 6px;"
+                    ></iframe>
+                  </a-card>
+                </a-col>
+
+                <!-- 模块 B: 智能批量表单填写 -->
+                <a-col :span="12">
+                  <a-card title="📝 场景 2: 批量表单智能填充 (browser_form_fill)" style="margin-bottom: 24px;">
+                    <a-form :model="v05Form" layout="vertical" @finish="onV05Submit">
+                      <a-form-item label="应用英文标识" name="appKey">
+                        <a-input v-model:value="v05Form.appKey" id="v05-app-key" placeholder="请输入应用 Key..." />
+                      </a-form-item>
+                      <a-form-item label="部署区域" name="deployRegion">
+                        <a-select v-model:value="v05Form.deployRegion" id="v05-deploy-region">
+                          <a-select-option value="北京">华北 (北京)</a-select-option>
+                          <a-select-option value="上海">华东 (上海)</a-select-option>
+                          <a-select-option value="新加坡">亚太 (新加坡)</a-select-option>
+                        </a-select>
+                      </a-form-item>
+                      <a-form-item label="启用高可用容灾" name="enableHA">
+                        <a-switch v-model:checked="v05Form.enableHA" id="v05-ha-switch" />
+                      </a-form-item>
+                      <a-button type="primary" html-type="submit" id="v05-submit-btn" @click="onV05Submit">立即生成部署计划</a-button>
+                    </a-form>
+                    <a-alert
+                      v-if="v05SubmittedResult"
+                      id="v05-submit-alert"
+                      :message="v05SubmittedResult"
+                      type="success"
+                      show-icon
+                      style="margin-top: 16px;"
+                    />
+                  </a-card>
+                </a-col>
+              </a-row>
+
+              <a-row :gutter="24">
+                <!-- 模块 C: 多模态 SoM 标徽 -->
+                <a-col :span="12">
+                  <a-card title="🎯 场景 3: 多模态 SoM 视口标徽与无痕渲染" style="margin-bottom: 24px;">
+                    <p style="color: #666; font-size: 13px;">包含密集操作按钮，测试截图时 SoM 徽章合成与截图后即时无痕销毁。</p>
+                    <a-space wrap>
+                      <a-button id="som-btn-1">🚀 快速诊断</a-button>
+                      <a-button type="dashed" id="som-btn-2">🛡️ 安全扫描</a-button>
+                      <a-button danger id="som-btn-3">🧹 清理缓存</a-button>
+                      <a-button type="primary" id="som-btn-4">📊 导出报表</a-button>
+                    </a-space>
+                  </a-card>
+                </a-col>
+
+                <!-- 模块 D: 视口外超长列表剪枝 -->
+                <a-col :span="12">
+                  <a-card title="📐 场景 4: 视口几何判定与长页面剪枝 (viewportOnly)">
+                    <p style="color: #666; font-size: 13px;">视口外堆叠了数十个折叠条目，测试开启 viewportOnly 时的有效剪枝。</p>
+                    <div style="max-height: 200px; overflow-y: auto; border: 1px solid #f0f0f0; padding: 12px; border-radius: 4px;">
+                      <div v-for="i in 50" :key="i" style="padding: 8px 0; border-bottom: 1px dashed #eee;">
+                        <span>条目 #{{ i }}: 边缘节点监控数据指标</span>
+                        <a-button size="small" style="margin-left: 8px;">查看详情</a-button>
+                      </div>
+                    </div>
+                  </a-card>
+                </a-col>
+              </a-row>
+            </a-tab-pane>
           </a-tabs>
         </a-card>
 
@@ -414,6 +491,18 @@ const modalGcMode = ref("conservative");
 const currentStep = ref(0);
 const activeCollapseKeys = ref(["1"]);
 const formSubmitting = ref(false);
+
+const v05Form = ref({
+  appKey: "order-center-api",
+  deployRegion: "北京",
+  enableHA: true,
+});
+const v05SubmittedResult = ref("");
+
+function onV05Submit() {
+  v05SubmittedResult.value = `已成功完成批量配置: ${v05Form.value.appKey} (${v05Form.value.deployRegion}) 已加入自动化发布队列！`;
+  message.success("表单批量填报成功！");
+}
 
 const formData = ref({
   clusterName: "prod-cloud-cluster-01",

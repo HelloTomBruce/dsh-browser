@@ -4,7 +4,7 @@ import type { BrowserConfig } from "../types.js";
 import { definePlainTool, genericCard } from "../../lib/tools.js";
 import {
   clickTool, typeTool, pressTool, selectTool, evalTool,
-  downloadTool, uploadTool, cookiesTool, formTool, formSaveTool, formsTool,
+  downloadTool, uploadTool, cookiesTool, formTool, formSaveTool, formsTool, formFillTool,
 } from "../tools.js";
 
 export function getInteractionTools(
@@ -349,6 +349,45 @@ export function getInteractionTools(
       },
       timeoutMs: timeout(),
       execute: (args) => formsTool(args),
-    })
+    }),
+    definePlainTool({
+      name: "browser_form_fill",
+      description: "智能批量表单填写: 一次调用自动识别并填充多个表单控件, 结合 UI 适配器自动处理输入/选择与弹层。",
+      parameters: {
+        type: "object",
+        properties: {
+          fields: {
+            type: "object",
+            description: "表单键值对映射(键支持 label/placeholder/selector, 值为待填内容)",
+          },
+          scope: {
+            type: "string",
+            description: "可选容器选择器, 限制填充范围",
+          },
+          submitButton: {
+            type: "string",
+            description: "可选, 填写完成后自动点击的提交按钮名称或选择器",
+          },
+          timeoutMs: { type: "integer" },
+        },
+        required: ["fields"],
+        additionalProperties: false,
+      },
+      outputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          filled: { type: "array", items: { type: "string" } },
+          skipped: { type: "array", items: { type: "string" } },
+          errors: { type: "object" },
+          submitted: { type: "boolean" },
+        },
+        required: ["filled", "skipped", "errors"],
+      },
+      render: (_args, value) =>
+        `Filled ${value.filled.length} fields: ${value.filled.join(", ")}${value.skipped.length > 0 ? ` (skipped: ${value.skipped.join(", ")})` : ""}${value.submitted ? " [Submitted]" : ""}`,
+      timeoutMs: timeout(),
+      execute: (args) => formFillTool(config, args),
+    }),
   ];
 }

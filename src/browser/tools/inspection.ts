@@ -12,7 +12,7 @@ import {
 import { safeName as sanitizeName } from "../recordings.js";
 import { workspaceBaseDir } from "../../lib/tools.js";
 import { injectWalker } from "../walker.js";
-import { compressText, diffLines, topSuggestions, pngSize, DROPDOWN_OPTION_SELECTOR } from "./common.js";
+import { compressText, diffLines, topSuggestions, pngSize, DROPDOWN_OPTION_SELECTOR, withTimeout } from "./common.js";
 
 /**
  * 页内 ARIA 树构建(walker 单一来源:roleOf/nameOf/cssPath/isVisible 与
@@ -21,16 +21,24 @@ import { compressText, diffLines, topSuggestions, pngSize, DROPDOWN_OPTION_SELEC
  * 可交互元素分配 ref=e1..eN 并附稳定 CSS 路径;无语义容器(div/span)穿透。
  * 输出形如 `- button "登录" [ref=e3]` 的缩进树,供纯文本模型定位操作目标。
  */
-const buildAriaTree = injectWalker<{ maxRefs: number; scope: string }, {
+const buildAriaTree = injectWalker<{
+  maxRefs: number;
+  scope: string;
+  viewportOnly?: boolean;
+  viewportPadding?: number;
+}, {
   tree: string;
   refs: { ref: string; role: string; name: string; selector: string }[];
   truncated: boolean;
   scopeMissing: boolean;
+  prunedCount: number;
 }>((payload, w) => {
-  const { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible } = w;
+  const { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible, isElementInViewport } = w;
   const lines: string[] = [];
   const refs: { ref: string; role: string; name: string; selector: string }[] = [];
   let truncated = false;
+  let prunedCount = 0;
+  const padding = payload.viewportPadding ?? 0;
 
   function walk(el: Element, depth: number): void {
     if (truncated) return;
@@ -38,6 +46,12 @@ const buildAriaTree = injectWalker<{ maxRefs: number; scope: string }, {
       truncated = true;
       return;
     }
+    // 视口感知剪枝: 当开启 viewportOnly 时，跳过不在视口内的分支
+    if (payload.viewportOnly && !isElementInViewport(el, padding)) {
+      prunedCount += 1;
+      return;
+    }
+
     const role = roleOf(el);
     if (INTERACTIVE.has(role)) {
       if (!isVisible(el)) return;
@@ -68,11 +82,11 @@ const buildAriaTree = injectWalker<{ maxRefs: number; scope: string }, {
     }
   }
 
-  if (document.body === null) return { tree: "", refs, truncated: false, scopeMissing: false };
+  if (document.body === null) return { tree: "", refs, truncated: false, scopeMissing: false, prunedCount: 0 };
   const root = payload.scope ? document.querySelector(payload.scope) : document.body;
-  if (root === null) return { tree: "", refs, truncated: false, scopeMissing: true };
+  if (root === null) return { tree: "", refs, truncated: false, scopeMissing: true, prunedCount: 0 };
   walk(root, 0);
-  return { tree: lines.join("\n"), refs, truncated, scopeMissing: false };
+  return { tree: lines.join("\n"), refs, truncated, scopeMissing: false, prunedCount };
 });
 
 /**
@@ -207,6 +221,8 @@ export async function snapshotTool(config: BrowserConfig, args: Record<string, a
   const scope = typeof args.scope === "string" && args.scope ? args.scope : "";
   const since = args.since !== undefined ? Number(args.since) : undefined;
   const ariaMode = args.mode === "aria";
+  const viewportOnly = args.viewportOnly === true;
+  const viewportPadding = Number(args.viewportPadding ?? 0) || 0;
   const identity = { url: page.url(), title: await page.title() };
 
   // 增量模式(F3 历史版本):since 命中环形窗口内任一保留版本 → 未变返回
@@ -221,15 +237,55 @@ export async function snapshotTool(config: BrowserConfig, args: Record<string, a
   let walkerTruncated = false;
   if (ariaMode) {
     const maxRefs = Math.min(Math.max(Number(args.maxRefs ?? config.maxRefs ?? 200) || 200, 1), 500);
-    const data = await page.evaluate(buildAriaTree, { maxRefs, scope });
+    const mainFrame = page.mainFrame();
+    const data = await mainFrame.evaluate(buildAriaTree, { maxRefs, scope, viewportOnly, viewportPadding });
     if (data.scopeMissing) throw new Error(`scope 未命中: 页面中没有匹配 "${scope}" 的元素`);
     const map = new Map<string, RefEntry>(
-      data.refs.map((r) => [r.ref, { role: r.role, name: r.name, selector: r.selector }]),
+      data.refs.map((r) => [r.ref, { role: r.role, name: r.name, selector: r.selector, frameIndex: 0, frameUrl: page.url() }]),
     );
+    let finalTree = data.tree;
+    let prunedTotal = data.prunedCount;
+
+    // 跨 Frame 树合成: 仅在未指定特定 scope 时遍历子 frame
+    if (!scope) {
+      const frames = page.frames();
+      for (let fIdx = 1; fIdx < frames.length; fIdx++) {
+        const sub = frames[fIdx];
+        if (sub.isDetached()) continue;
+        try {
+          const subData = await withTimeout(
+            sub.evaluate(buildAriaTree, { maxRefs: 50, scope: "", viewportOnly, viewportPadding }),
+            2000,
+            "子 Frame 遍历",
+          );
+          if (subData && subData.tree && subData.tree.trim()) {
+            const frameTitle = sub.name() || sub.url() || `frame-${fIdx}`;
+            const subTreeAdjusted = subData.tree.replace(/\[ref=(e\d+)\]/g, `[ref=f${fIdx}:$1]`);
+            finalTree += `\n--- [frame: ${frameTitle}] ---\n${subTreeAdjusted}\n------------------------------`;
+            prunedTotal += subData.prunedCount;
+            for (const r of subData.refs) {
+              map.set(`f${fIdx}:${r.ref}`, {
+                role: r.role,
+                name: r.name,
+                selector: r.selector,
+                frameIndex: fIdx,
+                frameUrl: sub.url(),
+              });
+            }
+          }
+        } catch {
+          // 忽略跨域访问受限或销毁的 Frame
+        }
+      }
+    }
+
     setPageRefs(page, map); // 整表替换,旧 ref 即刻失效
-    content = data.tree;
+    content = finalTree;
     walkerTruncated = data.truncated;
-    extra = { refs: data.refs.length };
+    extra = {
+      refs: map.size,
+      ...(viewportOnly ? { viewportOnly: true, prunedCount: prunedTotal } : {}),
+    };
   } else {
     const maxLinks = args.maxLinks ?? config.maxLinks;
     const data = await page.evaluate(
@@ -302,6 +358,80 @@ export async function snapshotTool(config: BrowserConfig, args: Record<string, a
   };
 }
 
+const removeSomOverlay = () => {
+  document.getElementById("__dsh_som_overlay__")?.remove();
+};
+
+const injectSomOverlay = injectWalker<{ maxMarks: number; color: string }, Array<{
+  id: number;
+  role: string;
+  name: string;
+}>>((payload, w) => {
+  const { INTERACTIVE, roleOf, nameOf, isVisible, isElementInViewport } = w;
+  const marks: Array<{ id: number; role: string; name: string }> = [];
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.id = "__dsh_som_overlay__";
+  svg.setAttribute("style", "position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;");
+
+  const candidates: Element[] = [];
+  function collect(el: Element): void {
+    const role = roleOf(el);
+    if (INTERACTIVE.has(role) && isVisible(el) && isElementInViewport(el, 0)) {
+      candidates.push(el);
+      return;
+    }
+    for (const c of Array.from(el.children)) {
+      if (c.tagName !== "SCRIPT" && c.tagName !== "STYLE") collect(c);
+    }
+  }
+
+  if (document.body) collect(document.body);
+
+  const badgeColor = payload.color === "blue" ? "#1890ff" : payload.color === "green" ? "#52c41a" : "#ff4d4f";
+  let count = 0;
+
+  for (const el of candidates) {
+    if (count >= payload.maxMarks) break;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 8 || rect.height < 8) continue;
+    count += 1;
+    const role = roleOf(el);
+    const name = nameOf(el, role);
+
+    const x = Math.max(0, rect.left);
+    const y = Math.max(0, rect.top);
+
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    const rectEl = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rectEl.setAttribute("x", String(x));
+    rectEl.setAttribute("y", String(y));
+    rectEl.setAttribute("width", count >= 10 ? "24" : "18");
+    rectEl.setAttribute("height", "18");
+    rectEl.setAttribute("rx", "3");
+    rectEl.setAttribute("fill", badgeColor);
+    rectEl.setAttribute("opacity", "0.92");
+
+    const textEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    textEl.setAttribute("x", String(x + (count >= 10 ? 12 : 9)));
+    textEl.setAttribute("y", String(y + 13));
+    textEl.setAttribute("fill", "#ffffff");
+    textEl.setAttribute("font-size", "11");
+    textEl.setAttribute("font-weight", "bold");
+    textEl.setAttribute("text-anchor", "middle");
+    textEl.setAttribute("font-family", "sans-serif");
+    textEl.textContent = String(count);
+
+    g.appendChild(rectEl);
+    g.appendChild(textEl);
+    svg.appendChild(g);
+
+    marks.push({ id: count, role, name });
+  }
+
+  document.documentElement.appendChild(svg);
+  return marks;
+});
+
 export async function screenshotTool(config: BrowserConfig, args: Record<string, any>, exec?: ToolRunContext) {
   const page = await getPage(config);
   const cwd = workspaceBaseDir(config, exec);
@@ -332,7 +462,28 @@ export async function screenshotTool(config: BrowserConfig, args: Record<string,
   );
   const fileName = safeName.endsWith(".png") ? safeName : `${safeName}.png`;
   const filePath = join(dir, fileName);
-  const buffer = await page.screenshot({ type: "png" });
+
+  let somMarks: Array<{ id: number; role: string; name: string }> | undefined = undefined;
+  if (args.som === true) {
+    try {
+      somMarks = await page.evaluate(injectSomOverlay, {
+        maxMarks: Number(args.maxMarks ?? 50) || 50,
+        color: String(args.somColor ?? "red"),
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  let buffer: Buffer;
+  try {
+    buffer = await page.screenshot({ type: "png" });
+  } finally {
+    if (args.som === true) {
+      await Promise.resolve(page.evaluate(removeSomOverlay)).catch(() => {});
+    }
+  }
+
   writeFileSync(filePath, buffer);
   // 懒清理:按保留天数/数量修剪目录,并把目录记下供定时清扫复用。
   noteScreenshotDir(dir);
@@ -346,6 +497,7 @@ export async function screenshotTool(config: BrowserConfig, args: Record<string,
     bytes: buffer.length,
     width: viewport.width,
     height: viewport.height,
+    ...(somMarks ? { som: true, somMarks } : {}),
   };
 }
 

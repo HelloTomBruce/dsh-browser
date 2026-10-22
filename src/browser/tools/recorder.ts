@@ -21,6 +21,7 @@ import { parseCsv } from "../extract.js";
 import { workspaceBaseDir } from "../../lib/tools.js";
 import { injectWalker } from "../walker.js";
 import { workspaceFilePath, unwrapDoubleEncodedScript } from "./common.js";
+import { compileToPlaywrightSpec } from "../codegen/playwright.js";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -105,7 +106,7 @@ export function healCandidates(hint: SelectorHint): { via: string; selector: str
 }
 
 /** 录制管理:start / stop / save / list / delete。 */
-export async function recordTool(args: Record<string, any>) {
+export async function recordTool(args: Record<string, any>, config?: BrowserConfig, exec?: ToolRunContext) {
   const action = args.action ?? "start";
   if (action === "start") {
     startRecording();
@@ -186,6 +187,30 @@ export async function recordTool(args: Record<string, any>) {
     const name = String(args.name);
     const deleted = deleteRecording(name);
     return { deleted, name };
+  }
+  if (action === "export") {
+    if (!args.name) throw new Error("export 需要 name");
+    const name = String(args.name);
+    reloadRecordingIfChanged(name);
+    const entry = savedRecordings.get(name);
+    if (!entry) throw new Error(`录制不存在: ${name}`);
+
+    const format = String(args.format ?? "playwright");
+    if (format !== "playwright") {
+      throw new Error(`暂不支持的导出格式: ${format}(当前仅支持 playwright)`);
+    }
+
+    const code = compileToPlaywrightSpec(entry.steps, { title: name });
+    const exportPath = typeof args.exportPath === "string" && args.exportPath ? args.exportPath : undefined;
+    if (exportPath) {
+      const cwd = workspaceBaseDir(config ?? {}, exec);
+      const fullPath = workspaceFilePath(cwd, exportPath);
+      mkdirSync(dirname(fullPath), { recursive: true });
+      writeFileSync(fullPath, code, "utf-8");
+      return { exported: true, format: "playwright", path: fullPath, code };
+    }
+
+    return { exported: true, format: "playwright", code };
   }
   throw new Error(`unknown record action: ${action}`);
 }

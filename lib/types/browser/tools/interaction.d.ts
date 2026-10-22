@@ -1,12 +1,8 @@
-import type { Locator, Page } from "playwright-core";
 import type { ToolRunContext } from "../../lib/types.js";
 import type { BrowserConfig } from "../types.js";
-/**
- * 解析点击/输入目标为 Locator:selector 直译;ref 走注册表——
- * 先试快照时的 CSS 路径并校验 role/name 仍一致(防 ref 漂移误点),
- * 不一致则降级 getByRole(role, {name}),均失败报「ref 已失效」。
- */
-export declare function targetLocator(page: Page, args: Record<string, any>): Promise<Locator>;
+import { targetLocator, resolveTargetLocator } from "../session.js";
+import type { FormFillResult } from "../adapters/types.js";
+export { targetLocator, resolveTargetLocator };
 export declare function clickTool(config: BrowserConfig, args: Record<string, any>): Promise<{
     url: string;
     title: string;
@@ -107,4 +103,8 @@ export declare function formsTool(args: Record<string, any>): Promise<{
     name: string;
     forms?: undefined;
 }>;
+/**
+ * 智能批量表单填写: 一次调用自动识别并填充多个表单控件, 结合 UI 适配器自动处理输入/选择与弹层
+ */
+export declare function formFillTool(config: BrowserConfig, args: Record<string, any>): Promise<FormFillResult>;
 //# sourceMappingURL=interaction.d.ts.map

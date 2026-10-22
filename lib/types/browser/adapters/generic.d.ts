@@ -1,5 +1,5 @@
 import type { Page } from "playwright-core";
-import type { QuiescenceOptions, SelectContext, SelectResult, UIAdapter } from "./types.js";
+import type { FormFieldItem, QuiescenceOptions, SelectContext, SelectResult, UIAdapter } from "./types.js";
 export declare class GenericAdapter implements UIAdapter {
     readonly name = "generic";
     /** 通用 W3C 标准弹窗选择器 */
@@ -14,5 +14,9 @@ export declare class GenericAdapter implements UIAdapter {
     /** 执行下拉选择：支持原生 <select> 与通用 ARIA combobox/listbox */
     selectOption(ctx: SelectContext): Promise<SelectResult>;
     waitForQuiescence(page: Page, options?: QuiescenceOptions): Promise<boolean>;
+    fillFormField(page: Page, field: FormFieldItem, scope?: string): Promise<{
+        handled: boolean;
+        error?: string;
+    }>;
 }
 //# sourceMappingURL=generic.d.ts.map

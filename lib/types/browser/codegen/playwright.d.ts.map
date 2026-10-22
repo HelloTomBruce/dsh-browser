@@ -1,0 +1,1 @@
+{"version":3,"file":"playwright.d.ts","sourceRoot":"","sources":["../../../../src/browser/codegen/playwright.ts"],"names":[],"mappings":"AACA,OAAO,KAAK,EAAE,UAAU,EAAE,MAAM,aAAa,CAAC;AAE9C,MAAM,WAAW,cAAc;IAC7B,KAAK,CAAC,EAAE,MAAM,CAAC;IACf,OAAO,CAAC,EAAE,MAAM,CAAC;CAClB;AAED;;GAEG;AACH,wBAAgB,uBAAuB,CAAC,KAAK,EAAE,UAAU,EAAE,EAAE,OAAO,GAAE,cAAmB,GAAG,MAAM,CA0HjG"}

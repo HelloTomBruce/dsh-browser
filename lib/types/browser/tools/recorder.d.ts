@@ -20,13 +20,17 @@ export declare function healCandidates(hint: SelectorHint): {
     selector: string;
 }[];
 /** 录制管理:start / stop / save / list / delete。 */
-export declare function recordTool(args: Record<string, any>): Promise<{
+export declare function recordTool(args: Record<string, any>, config?: BrowserConfig, exec?: ToolRunContext): Promise<{
     recording: boolean;
     hint: string;
     steps?: undefined;
     recordings?: undefined;
     deleted?: undefined;
     name?: undefined;
+    exported?: undefined;
+    format?: undefined;
+    path?: undefined;
+    code?: undefined;
 } | {
     recording: boolean;
     steps: number;
@@ -34,6 +38,10 @@ export declare function recordTool(args: Record<string, any>): Promise<{
     recordings?: undefined;
     deleted?: undefined;
     name?: undefined;
+    exported?: undefined;
+    format?: undefined;
+    path?: undefined;
+    code?: undefined;
 } | {
     hint: string;
     warnings?: string[] | undefined;
@@ -48,6 +56,10 @@ export declare function recordTool(args: Record<string, any>): Promise<{
     recordings?: undefined;
     deleted?: undefined;
     name?: undefined;
+    exported?: undefined;
+    format?: undefined;
+    path?: undefined;
+    code?: undefined;
 } | {
     recordings: {
         name: string;
@@ -60,6 +72,10 @@ export declare function recordTool(args: Record<string, any>): Promise<{
     steps?: undefined;
     deleted?: undefined;
     name?: undefined;
+    exported?: undefined;
+    format?: undefined;
+    path?: undefined;
+    code?: undefined;
 } | {
     deleted: boolean;
     name: string;
@@ -67,6 +83,32 @@ export declare function recordTool(args: Record<string, any>): Promise<{
     hint?: undefined;
     steps?: undefined;
     recordings?: undefined;
+    exported?: undefined;
+    format?: undefined;
+    path?: undefined;
+    code?: undefined;
+} | {
+    exported: boolean;
+    format: string;
+    path: string;
+    code: string;
+    recording?: undefined;
+    hint?: undefined;
+    steps?: undefined;
+    recordings?: undefined;
+    deleted?: undefined;
+    name?: undefined;
+} | {
+    exported: boolean;
+    format: string;
+    code: string;
+    recording?: undefined;
+    hint?: undefined;
+    steps?: undefined;
+    recordings?: undefined;
+    deleted?: undefined;
+    name?: undefined;
+    path?: undefined;
 }>;
 /** 回放选项(自愈开关与单次尝试超时,来自 config;retryFailed 为自动重试次数)。 */
 export interface ReplayOptions {

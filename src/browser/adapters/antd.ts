@@ -4,6 +4,7 @@ import { waitForDOMQuiescence } from "./quiescence.js";
 import type {
   ActionContext,
   ActionResult,
+  FormFieldItem,
   QuiescenceOptions,
   SelectContext,
   SelectResult,
@@ -189,22 +190,17 @@ export class AntDesignAdapter implements UIAdapter {
       .catch(() => false);
 
     if (!isExpanded) {
-      // 优先点击外层 .ant-select-selector 触发容器展开
-      const handled = await target
-        .evaluate((el) => {
-          const selector = (el.closest(".ant-select-selector, .ant-select") || el) as HTMLElement;
-          selector.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
-          selector.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
-          selector.click();
-          return true;
-        })
-        .catch(() => false);
-
-      if (!handled) {
-        await target.click({ timeout: Math.min(timeout, 10_000) }).catch(async () => {
-          await target.click({ timeout: 2_000, force: true });
+      const clickTarget = target.locator(".ant-select-selector").first();
+      if ((await clickTarget.count().catch(() => 0)) > 0) {
+        await clickTarget.click({ timeout: 2000 }).catch(async () => {
+          await target.click({ timeout: 2000, force: true });
+        });
+      } else {
+        await target.click({ timeout: 2000 }).catch(async () => {
+          await target.click({ timeout: 2000, force: true });
         });
       }
+      await page.waitForTimeout(120);
     }
 
     // 定位选项:优先通过 controlsId 关联所在的 .ant-select-dropdown 浮层,
@@ -277,5 +273,68 @@ export class AntDesignAdapter implements UIAdapter {
     }
 
     return { selected: visibleTexts[index] };
+  }
+
+  /** Ant Design 表单项精准识别与填充 */
+  async fillFormField(
+    page: Page,
+    field: FormFieldItem,
+    scope?: string,
+  ): Promise<{ handled: boolean; error?: string }> {
+    const root = scope ? page.locator(scope) : page;
+    const { key, value } = field;
+
+    try {
+      // 1. 定位包含对应 Label 的 .ant-form-item
+      const formItems = root.locator(".ant-form-item");
+      const count = await formItems.count().catch(() => 0);
+
+      for (let i = 0; i < count; i++) {
+        const item = formItems.nth(i);
+        const labelEl = item.locator("label, .ant-form-item-label").first();
+        let labelText = (await labelEl.innerText().catch(() => "")) || (await labelEl.textContent().catch(() => "")) || "";
+        labelText = labelText.trim();
+
+        if (labelText.includes(key)) {
+          // 检查内部控件类型
+          // A. 下拉选择器 .ant-select
+          const antSelect = item.locator(".ant-select").first();
+          if ((await antSelect.count().catch(() => 0)) > 0) {
+            await this.selectOption({
+              page,
+              target: antSelect,
+              label: key,
+              want: String(value),
+              exact: false,
+              timeout: 5000,
+            });
+            return { handled: true };
+          }
+
+          // B. 开关控件 .ant-switch
+          const antSwitch = item.locator(".ant-switch").first();
+          if ((await antSwitch.count().catch(() => 0)) > 0) {
+            const isChecked = await antSwitch
+              .evaluate((el) => el.getAttribute("aria-checked") === "true")
+              .catch(() => false);
+            if (Boolean(value) !== isChecked) {
+              await antSwitch.click();
+            }
+            return { handled: true };
+          }
+
+          // C. 普通输入框 / 文本域 / 数字输入框
+          const input = item.locator("input, textarea").first();
+          if ((await input.count().catch(() => 0)) > 0) {
+            await input.fill(String(value));
+            return { handled: true };
+          }
+        }
+      }
+    } catch (err: any) {
+      return { handled: false, error: err.message };
+    }
+
+    return { handled: false };
   }
 }

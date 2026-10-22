@@ -4,9 +4,9 @@ DSH 插件:共享 Playwright 浏览器自动化 + 原生界面实时画面面板
 
 | 模块 | 做什么 |
 | --- | --- |
-| 🧭 **浏览器自动化** | 共享 Playwright 浏览器:多标签、多 profile、隔离 context、下载/上传、Cookie、表单回放、增量快照(历史版本环形缓存,窗口内任意 since 可 diff)、抽取字段自动建议(action:suggest),36 个 `browser_*` 工具 |
+| 🧭 **浏览器自动化** | 共享 Playwright 浏览器:多标签、多 profile、隔离 context、下载/上传、Cookie、跨 Frame/IFrame 穿透定位、视口感知动态快照(`viewportOnly`)、多模态 SoM 视口标徽(`som: true`)、批量表单智能填充(`browser_form_fill`)、增量快照(历史版本环形缓存,窗口内任意 since 可 diff)、抽取字段自动建议(action:suggest),37 个 `browser_*` 工具 |
 | 🖥️ **实时画面** | 注入 DSH 界面右下角悬浮面板:浏览器状态 + 实时缩略图,点开大屏模态框(2 秒轮询画面 + 访问历史);**双向协作**——agent 等待人工操作/敏感审批时显示交互横幅、执行点击/输入前目标元素琥珀色高亮预告(confirmMode:auto 时敏感动作由宿主层强制拦截弹审批,agent 无法绕过),「最近回归」行与报告模态可一键重跑(agent 忙碌自动置灰) |
-| ✅ **回归测试闭环** | 录制回放 + 选择器自愈 + 参数化/数据驱动 + 失败自动重试(`retryFailed`)+ 视觉回归 + 运行历史/报告导出 + 面板一键重跑(`/runs/rerun`,agent 忙碌置灰) |
+| ✅ **回归测试闭环** | 录制回放 + 选择器自愈 + 参数化/数据驱动 + 失败自动重试(`retryFailed`)+ 视觉回归 + 运行历史/报告导出 + **一键导出原生 Playwright 规范代码(`action: "export"`)** + 面板一键重跑(`/runs/rerun`,agent 忙碌置灰) |
 
 设计原则:能做的一次性操作交给 agent 用 bash 完成,插件只做 bash 做不到的常驻浏览器自动化。唯一第三方运行时依赖是 `playwright-core`(复用系统已装的 Edge/Chrome,无需下载 Chromium),不依赖任何 `@deepseek-ai` 运行时包。
 
@@ -64,11 +64,12 @@ dsh plugin --profile web add dsh-browser-view
 | `browser_snapshot` | 页面快照:`mode: "text"`(默认)返回压缩后的文本/链接/输入框;`mode: "aria"` 返回可访问性树,可交互元素带 `[ref=eN]` 短引用;`scope`(CSS 选择器)限定提取区域(text/aria 都生效);`since`(上次返回的 contentVersion)增量重读——未变返回 `unchanged`,变了只返回变化行(`diff` + `changedFrom`/`removed`),翻页后重读 token 降一个量级 |
 | `browser_find` | 语义元素定位:按名称/id/data-testid 查找可交互元素,只返回命中 ref + ancestors 区域链(大页面定位单目标比全量 aria 快照省 95%+ token);`exact` 精确匹配、`scope` 限定容器;多命中全返回,零命中附相近候选 |
 | `browser_elements` | 可交互元素结构化清单(input/button/select/链接 + 关联 label + 现成 CSS 选择器;有展开下拉时附可见选项) |
-| `browser_click` / `browser_type` / `browser_press` | 点击 / 输入(可清空、可回车提交)/ 按键;`selector`(CSS)与 `ref`(aria 快照)二选一 |
+| `browser_click` / `browser_type` / `browser_press` | 点击 / 输入(可清空、可回车提交)/ 按键;`selector`(CSS)与 `ref`(aria 快照)二选一;自动识别并穿透跨域子 Frame |
 | `browser_select` | 下拉选择原语:原生 `<select>` 与 antd / element-plus / ARIA listbox 通用,selector/ref + option 文本一步完成;找不到选项时报错并列出可见选项 |
+| `browser_form_fill` | 智能批量表单填写:一次调用自动识别并填充多个表单控件,结合 UI 适配器自动反查 label、处理输入/选择与弹层并支持稳态等待 |
 | `browser_eval` | 在页面上下文执行 JS(结果自动净化成 lossless JSON) |
 | `browser_batch` | 动作批处理:一次调用顺序执行多个步骤 `[{tool, args}]`(点击→等待→输入→提交类小序列减少往返;禁止嵌套;可录制可回放) |
-| `browser_screenshot` | 截图存为 PNG(自动清理,见下);`baseline: "<名>"` 存为视觉回归基线(不受清理约束) |
+| `browser_screenshot` | 截图存为 PNG(自动清理,见下);`baseline: "<名>"` 存为视觉回归基线;`som: true` 启用多模态 Set-of-Marks 视口标徽,在交互元素上绘制数字徽章并返回映射表供大模型精准看图定位 |
 | `browser_wait` / `browser_back` / `browser_reload` | 等待 / 后退 / 刷新 |
 | `browser_wait_for_login` | 等待人工登录完成(配 `headless: false` 使用,见下) |
 | `browser_pause_for_human` | 人工接管等待:agent 把控制权暂时交还给用户(验证码/二次确认/人工复核),instruction 显示在实时画面面板;`successSelector` / `successUrl` 指定完成条件,都不给则 URL/页面内容变化即视为完成;轮询 2 秒,超时返回 `completed: false` 不抛错 |
@@ -77,7 +78,7 @@ dsh plugin --profile web add dsh-browser-view
 | `browser_assert` | 结构化断言(失败自动截图存证据目录并报错);`visual: { baseline }` 做视觉回归断言(见下) |
 | `browser_network` | 接口记录查询:list / failed(4xx/5xx)/ wait(命中返回 waitMs,超时附最近请求摘要)/ stats(按 host 聚合计数/失败数/均耗时/状态码分布)/ clear,含请求/响应体(截断) |
 | `browser_extract` | 规则化结构化抽取:fields 定义 CSS 字段(支持嵌套/multiple),`next` 自动翻页聚合,导出 json / csv / jsonl / markdown 落盘工作区;`action: "suggest"` 自动推断字段(表格首行/列表卡片 → 单元格文本/链接 href/图片 src),返回建议 fields + 首行样本,微调后直接交给抽取模式(往返 3-4 次降到 2 次);推断不出规律结构返回原因与容器概览,不猜 |
-| `browser_record` | 操作录制:start / stop / save(list/delete 管理;save 支持 `stripReads` 剔除只读步骤、`vars` 把指定步骤字段抽成 `{{占位符}}`;selector 步骤自动附带元素指纹供回放自愈;**录制期间用户在浏览器中的手动输入/点击/选择也会进录制**,标记 `source: "human"`) |
+| `browser_record` | 操作录制:start / stop / save(list/delete 管理;save 支持 `stripReads` 剔除只读步骤、`vars` 把指定步骤字段抽成 `{{占位符}}`;selector 步骤自动附带元素指纹供回放自愈;**录制期间用户在浏览器中的手动输入/点击/选择也会进录制**,标记 `source: "human"`);`action: "export"` 可将录制序列一键编译转译为原生 Playwright TypeScript 测试代码(`format: "playwright"`) |
 | `browser_replay` | 回放录制或步骤序列(回归测试,遇错可停);`vars` 注入占位符,`data` / `dataFile`(CSV)逐行数据驱动;选择器失效自动按指纹自愈;`retryFailed: N` 失败步骤自动重试 N 次(500ms×n 退避,重试耗尽才停),返回 `retries: { attempted, recovered }` |
 | `browser_report` | 回归报告:list / show / export(运行历史自动记录,export 聚合为 Markdown / 自包含 HTML 落盘) |
 | `browser_status` / `browser_close` | 状态 / 关闭会话 |
