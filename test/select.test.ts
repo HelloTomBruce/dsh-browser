@@ -103,4 +103,45 @@ describe("selectTool - 组件库下拉框兼容性", () => {
     const chosen = await page.evaluate(() => (window as any).__chosen);
     expect(chosen).toBe("Special");
   });
+
+  it("当页面存在上一个遗留展开的下拉框时，能精准定位目标 selector 的下拉，避免误中旧浮层", async () => {
+    // 模拟场景：上一个下拉（区县）还开着，正在尝试选择下一个下拉（节能类型）
+    await page.setContent(`
+      <!-- 第一个下拉（残留展开）: 区县 -->
+      <div class="ant-select ant-select-open" id="form_item_district">
+        <div class="ant-select-selector">
+          <input id="district_input" role="combobox" aria-expanded="true" aria-controls="district_list" />
+        </div>
+      </div>
+      <div id="district_list" class="ant-select-dropdown">
+        <div role="listbox">
+          <div role="option" class="ant-select-item-option" onclick="window.__chosen = '西湖区'">西湖区</div>
+          <div role="option" class="ant-select-item-option" onclick="window.__chosen = '拱墅区'">拱墅区</div>
+        </div>
+      </div>
+
+      <!-- 第二个下拉: 节能类型 -->
+      <div class="ant-select" id="form_item_energyType">
+        <div class="ant-select-selector" onclick="
+          const dd = document.getElementById('energy_list');
+          dd.classList.remove('ant-select-dropdown-hidden');
+          document.getElementById('energy_input').setAttribute('aria-expanded', 'true');
+        ">
+          <input id="energy_input" role="combobox" aria-expanded="false" aria-controls="energy_list" />
+        </div>
+      </div>
+      <div id="energy_list" class="ant-select-dropdown ant-select-dropdown-hidden">
+        <div role="listbox">
+          <div role="option" class="ant-select-item-option" onclick="window.__chosen = 'XSDU'">XSDU</div>
+          <div role="option" class="ant-select-item-option" onclick="window.__chosen = 'AUTO'">AUTO</div>
+        </div>
+      </div>
+    `);
+
+    // 对第二个下拉选择 XSDU
+    const res = await selectTool(config, { selector: "#form_item_energyType", option: "XSDU" });
+    expect(res.selected).toBe("XSDU");
+    const chosen = await page.evaluate(() => (window as any).__chosen);
+    expect(chosen).toBe("XSDU");
+  });
 });

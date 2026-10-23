@@ -70,7 +70,12 @@ const buildAriaTree = injectWalker<{
       if (!isVisible(el)) return;
       const name = nameOf(el, role);
       const level = role === "heading" ? ` [level=${el.tagName[1] ?? "1"}]` : "";
-      lines.push(`${"  ".repeat(depth)}- ${role}${name !== "" ? ` "${name.replace(/"/g, "'")}"` : ""}${level}`);
+      const isDialog =
+        role === "dialog" ||
+        role === "alertdialog" ||
+        el.getAttribute("aria-modal") === "true";
+      const dialogFlag = isDialog ? " [modal: closeOnEsc]" : "";
+      lines.push(`${"  ".repeat(depth)}- ${role}${name !== "" ? ` "${name.replace(/"/g, "'")}"` : ""}${level}${dialogFlag}`);
       for (const c of Array.from(el.children)) {
         if (!SKIP_TAGS.has(c.tagName.toLowerCase())) walk(c, depth + 1);
       }
@@ -117,6 +122,7 @@ const findInteractive = injectWalker<{ query: string; exact: boolean; scope: str
   }
 
   const q = payload.query.trim().toLowerCase();
+  const qStripped = q.replace(/\s+/g, "");
   const matches: { role: string; name: string; selector: string; ancestors: string[] }[] = [];
   const candidates: { role: string; name: string }[] = [];
   let scanned = 0;
@@ -134,9 +140,16 @@ const findInteractive = injectWalker<{ query: string; exact: boolean; scope: str
       let hit = false;
       if (name !== "") {
         const n = name.toLowerCase();
-        hit = payload.exact ? n === q : n.includes(q);
+        const nStripped = n.replace(/\s+/g, "");
+        // 支持去空白归一化 (解决 antd "导 出" vs "导出", "确 定" vs "确定" 等 Two-word 按钮分词空格)
+        hit = payload.exact
+          ? n === q || (qStripped !== "" && nStripped === qStripped)
+          : n.includes(q) || (qStripped !== "" && nStripped.includes(qStripped));
       }
-      if (!hit && idOrTestid !== "" && idOrTestid.toLowerCase() === q) hit = true;
+      if (!hit && idOrTestid !== "") {
+        const idLower = idOrTestid.toLowerCase();
+        hit = idLower === q || (qStripped !== "" && idLower.replace(/\s+/g, "") === qStripped);
+      }
       scanned += 1;
       if (name !== "" && candidates.length < 50) candidates.push({ role, name });
       if (hit && matches.length < payload.limit) {
@@ -239,19 +252,46 @@ export async function snapshotTool(config: BrowserConfig, args: Record<string, a
     const maxRefs = Math.min(Math.max(Number(args.maxRefs ?? config.maxRefs ?? 200) || 200, 1), 500);
     const mainFrame = page.mainFrame();
     const data = await mainFrame.evaluate(buildAriaTree, { maxRefs, scope, viewportOnly, viewportPadding });
-    if (data.scopeMissing) throw new Error(`scope 未命中: 页面中没有匹配 "${scope}" 的元素`);
+    if (data.scopeMissing) {
+      const isDialogScope = /modal|dialog|drawer/i.test(scope);
+      const hint = isDialogScope
+        ? "。目标容器可能已消失（弹窗/抽屉已关闭、已提交或页面已导航）"
+        : "";
+      throw new Error(`scope 未命中: 页面中没有匹配 "${scope}" 的元素${hint}`);
+    }
     const map = new Map<string, RefEntry>(
       data.refs.map((r) => [r.ref, { role: r.role, name: r.name, selector: r.selector, frameIndex: 0, frameUrl: page.url() }]),
     );
     let finalTree = data.tree;
     let prunedTotal = data.prunedCount;
 
-    // 跨 Frame 树合成: 仅在未指定特定 scope 时遍历子 frame
-    if (!scope) {
+    // 跨 Frame 树合成与去重 (支持 dedupeFrames 自动折叠重复镜像、ignoreFrames 过滤指定框架)
+    const ignoreFrames = Array.isArray(args.ignoreFrames) ? args.ignoreFrames.map(String) : [];
+    const dedupeFrames = args.dedupeFrames !== false;
+    const seenTrees = new Map<string, string>(); // treeFingerprint -> firstFrameTitle
+
+    // 仅在未限定特定 scope 且未显式关闭 frames 时遍历子 frame
+    if (!scope && args.frames !== false) {
       const frames = page.frames();
       for (let fIdx = 1; fIdx < frames.length; fIdx++) {
         const sub = frames[fIdx];
         if (sub.isDetached()) continue;
+        const frameName = sub.name() || "";
+        const frameUrl = sub.url() || "";
+        const frameTitle = frameName || frameUrl || `frame-${fIdx}`;
+
+        // 检查 ignoreFrames 过滤规则
+        if (
+          ignoreFrames.some(
+            (ig) =>
+              (frameName && frameName.includes(ig)) ||
+              (frameUrl && frameUrl.includes(ig)) ||
+              frameTitle.includes(ig),
+          )
+        ) {
+          continue;
+        }
+
         try {
           const subData = await withTimeout(
             sub.evaluate(buildAriaTree, { maxRefs: 50, scope: "", viewportOnly, viewportPadding }),
@@ -259,7 +299,17 @@ export async function snapshotTool(config: BrowserConfig, args: Record<string, a
             "子 Frame 遍历",
           );
           if (subData && subData.tree && subData.tree.trim()) {
-            const frameTitle = sub.name() || sub.url() || `frame-${fIdx}`;
+            const rawTree = subData.tree.trim();
+            // 内容指纹（去除 ref 编号影响后判断是否镜像内容）
+            const treeFingerprint = rawTree.replace(/\[ref=e\d+\]/g, "");
+
+            if (dedupeFrames && seenTrees.has(treeFingerprint)) {
+              const original = seenTrees.get(treeFingerprint)!;
+              finalTree += `\n--- [frame: ${frameTitle}] (同 ${original} 镜像内容,已去重折叠) ---`;
+              continue;
+            }
+
+            seenTrees.set(treeFingerprint, frameTitle);
             const subTreeAdjusted = subData.tree.replace(/\[ref=(e\d+)\]/g, `[ref=f${fIdx}:$1]`);
             finalTree += `\n--- [frame: ${frameTitle}] ---\n${subTreeAdjusted}\n------------------------------`;
             prunedTotal += subData.prunedCount;

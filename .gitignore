@@ -1,4 +1,5 @@
 node_modules
+lib
 .dsh-browser
 *.log
 .DS_Store

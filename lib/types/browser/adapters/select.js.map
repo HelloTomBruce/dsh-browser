@@ -1,1 +1,0 @@
-{"version":3,"file":"select.js","sourceRoot":"","sources":["../../../../src/browser/adapters/select.ts"],"names":[],"mappings":"AAAA,oDAAoD;AACpD,wEAAwE;AACxE,mCAAmC;AAGnC,OAAO,EAAE,eAAe,EAAE,MAAM,eAAe,CAAC;AAahD;;GAEG;AACH,MAAM,CAAC,KAAK,UAAU,oBAAoB,CAAC,GAAkB;IAC3D,OAAO,eAAe,CAAC,aAAa,CAAC,GAAG,CAAC,CAAC;AAC5C,CAAC"}

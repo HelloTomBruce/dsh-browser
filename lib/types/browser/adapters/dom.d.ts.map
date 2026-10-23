@@ -1,1 +1,0 @@
-{"version":3,"file":"dom.d.ts","sourceRoot":"","sources":["../../../../src/browser/adapters/dom.ts"],"names":[],"mappings":"AAIA,OAAO,KAAK,EAAE,OAAO,EAAE,IAAI,EAAE,MAAM,iBAAiB,CAAC;AAGrD;;;;GAIG;AACH,wBAAgB,mBAAmB,CAAC,EAAE,EAAE,OAAO,GAAG,MAAM,CAkCvD;AAED,6CAA6C;AAC7C,eAAO,MAAM,uBAAuB,QAKxB,CAAC;AAEb;;;GAGG;AACH,wBAAgB,eAAe,CAAC,IAAI,EAAE,IAAI,GAAG,OAAO,CAKnD"}

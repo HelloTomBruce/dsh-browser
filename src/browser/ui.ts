@@ -27,7 +27,8 @@ function truncateForDisplay(args: unknown): unknown {
 
 
 export function registerBrowserApi(ctx: ReefContext, config: BrowserConfig, base: string) {
-  const webServer = ctx.get<{ register(route: WebRoute): () => void }>("webServer");
+  const webServer =
+    ctx.get<{ register(route: WebRoute): () => void }>("webServer") ?? (ctx as any).webServer;
   if (webServer === undefined) return;
   const disposers: (() => void)[] = [];
   disposers.push(

@@ -111,20 +111,38 @@ export class AntDesignAdapter implements UIAdapter {
     async beforeAction(ctx: ActionContext): Promise<Locator | void> {
       if (ctx.action !== "click") return;
 
-      // 目标提升(Target Lifting)：若点击的是被零尺寸隐藏的原生 input，提升至其外部可交互 wrapper
+      // 目标提升(Target Lifting)：
+      // 1. 若点击的是被零尺寸隐藏的原生 input，提升至其外部可交互 wrapper
+      // 2. 若点击的是 Ant Design combobox 内部的 0 尺寸/opacity 0 input，提升至 .ant-select-selector
       try {
-        const isHiddenInput = await ctx.target.evaluate((el) => {
-          if (el.tagName.toLowerCase() !== "input") return false;
+        const targetKind = await ctx.target.evaluate((el) => {
+          if (el.tagName.toLowerCase() !== "input") return null;
           const type = (el.getAttribute("type") || "").toLowerCase();
-          if (type !== "checkbox" && type !== "radio") return false;
-          const rect = el.getBoundingClientRect();
-          const wrapper = el.closest(".ant-checkbox-wrapper, .ant-radio-wrapper");
-          return Boolean(wrapper && (rect.width === 0 || rect.height === 0 || window.getComputedStyle(el).opacity === "0"));
+          const role = el.getAttribute("role");
+          const cls = el.className || "";
+          if (type === "checkbox" || type === "radio") {
+            const rect = el.getBoundingClientRect();
+            const wrapper = el.closest(".ant-checkbox-wrapper, .ant-radio-wrapper");
+            if (wrapper && (rect.width === 0 || rect.height === 0 || window.getComputedStyle(el).opacity === "0")) {
+              return "checkbox-radio";
+            }
+          }
+          if (role === "combobox" || cls.includes("ant-select-selection-search-input") || Boolean(el.closest(".ant-select"))) {
+            return "combobox-input";
+          }
+          return null;
         });
 
-        if (isHiddenInput) {
-          // 提升至上层可见的 wrapper 点击
+        if (targetKind === "checkbox-radio") {
           return ctx.target.locator("xpath=ancestor::*[contains(@class, '-wrapper')][1]");
+        }
+        if (targetKind === "combobox-input") {
+          const selectorLocator = ctx.target.locator(
+            "xpath=ancestor-or-self::*[contains(@class, 'ant-select-selector') or contains(@class, 'ant-select')][1]",
+          );
+          if ((await selectorLocator.count().catch(() => 0)) > 0) {
+            return selectorLocator;
+          }
         }
       } catch {
         // 评估失败忽略，按原 target 执行
@@ -134,8 +152,13 @@ export class AntDesignAdapter implements UIAdapter {
     async onActionError(ctx: ActionContext, error: Error): Promise<ActionResult | void> {
       const msg = error.message;
 
-      // 自愈策略 1: 遮罩层拦截 (intercepts pointer events)
-      if (msg.includes("intercepts pointer events")) {
+      // 自愈策略 1: 遮罩层拦截 (intercepts pointer events) 或动画导致的非稳态超时
+      if (
+        msg.includes("intercepts pointer events") ||
+        msg.includes("is not visible") ||
+        msg.includes("not stable") ||
+        msg.includes("Timeout")
+      ) {
         const isMask =
           msg.includes("ant-modal-wrap") ||
           msg.includes("ant-modal-mask") ||
@@ -145,6 +168,17 @@ export class AntDesignAdapter implements UIAdapter {
           // 方案 A：如果是遮罩正在淡出动画，快速等待 100ms
           await ctx.page.waitForTimeout(100);
           // 方案 B：重试使用 force: true 穿透拦截
+          return {
+            handled: true,
+            retryWith: { force: true, timeoutMs: 3000 },
+          };
+        }
+
+        // 针对 Ant Design 下拉触发器或按钮动画过程中的点击挂起，尝试 force 快速恢复
+        const isAntElement = await ctx.target
+          .evaluate((el) => Boolean(el.closest("[class*='ant-']")))
+          .catch(() => false);
+        if (isAntElement) {
           return {
             handled: true,
             retryWith: { force: true, timeoutMs: 3000 },
@@ -210,18 +244,28 @@ export class AntDesignAdapter implements UIAdapter {
       await page.waitForTimeout(120);
     }
 
-    // 定位选项:优先通过 controlsId 关联所在的 .ant-select-dropdown 浮层,
-    // 优先选择真实视觉交互项 .ant-select-item-option(如有),无时降级到 [role='option'](排除 0 宽度傀儡节点)
+    // 定位选项:深度解析关联的 controlsId (支持 el 本身、内部 input、或最近 .ant-select 宿主内部的 combobox/controls)
     const controlsId = await target
-      .evaluate((el) => el.getAttribute("aria-controls") || el.getAttribute("aria-owns") || "")
+      .evaluate((el) => {
+        const direct = el.getAttribute("aria-controls") || el.getAttribute("aria-owns");
+        if (direct) return direct;
+        const host = el.closest(".ant-select") || el.querySelector(".ant-select") || el;
+        const inner = host?.querySelector(
+          "input[role='combobox'], input[aria-controls], [aria-controls], [aria-owns]",
+        );
+        return (
+          inner?.getAttribute("aria-controls") ||
+          inner?.getAttribute("aria-owns") ||
+          host?.getAttribute("aria-controls") ||
+          ""
+        );
+      })
       .catch(() => "");
 
-    let options = page.locator(
-      ".ant-select-dropdown:not(.ant-select-dropdown-hidden):not([style*='display: none']) .ant-select-item-option, .ant-select-dropdown:not(.ant-select-dropdown-hidden):not([style*='display: none']) [role='option']:not([style*='height: 0px'])",
-    );
+    let options: Locator;
     if (controlsId) {
       const parentDropdown = page.locator(
-        `xpath=//*[@id='${controlsId}']/ancestor-or-self::*[contains(@class, 'ant-select-dropdown')][1]`,
+        `xpath=//*[@id='${controlsId}']/ancestor-or-self::*[contains(@class, 'ant-select-dropdown')][1] | //*[contains(@class, 'ant-select-dropdown')][.//*[@id='${controlsId}']]`,
       );
       const visual = parentDropdown.locator(".ant-select-item-option");
       if ((await visual.count().catch(() => 0)) > 0) {
@@ -230,7 +274,22 @@ export class AntDesignAdapter implements UIAdapter {
         const roleOpt = parentDropdown.locator("[role='option']:not([style*='height: 0px'])");
         if ((await roleOpt.count().catch(() => 0)) > 0) {
           options = roleOpt;
+        } else {
+          options = parentDropdown.locator(".ant-select-item");
         }
+      }
+    } else {
+      // 当 controlsId 未显式关联时：只定位当前激活的下拉浮层，多浮层时取最新插入的 DOM 节点（避免误中上一个遗留展开的浮层）
+      const activeDropdowns = page.locator(
+        ".ant-select-dropdown:not(.ant-select-dropdown-hidden):not([style*='display: none'])",
+      );
+      const count = await activeDropdowns.count().catch(() => 0);
+      const dropdown = count > 1 ? activeDropdowns.last() : activeDropdowns.first();
+      const visual = dropdown.locator(".ant-select-item-option");
+      if ((await visual.count().catch(() => 0)) > 0) {
+        options = visual;
+      } else {
+        options = dropdown.locator("[role='option']:not([style*='height: 0px'])");
       }
     }
 
@@ -254,13 +313,21 @@ export class AntDesignAdapter implements UIAdapter {
       throw new Error(`点击 ${label} 后未出现 Ant Design 下拉选项`);
     }
 
+    // 空白归一化匹配 (解决 "导 出" vs "导出", "西 湖 区" vs "西湖区" 等分词空格干扰)
+    const stripSpaces = (s: string) => s.replace(/\s+/g, "");
+    const wantStripped = stripSpaces(want);
+
     const index = entries.findIndex((e) => {
       const candidates = [e.text, e.title, e.aria].filter(Boolean);
-      return exact ? candidates.some((c) => c === want) : candidates.some((c) => c.includes(want));
+      if (exact) {
+        return candidates.some((c) => c === want || stripSpaces(c) === wantStripped);
+      }
+      return candidates.some((c) => c.includes(want) || stripSpaces(c).includes(wantStripped));
     });
 
     if (index === -1) {
-      await target.click({ timeout: 1000 }).catch(() => {});
+      // 匹配失败时主动收起当前浮层，避免干扰后续其他下拉的选择
+      await page.keyboard.press("Escape").catch(() => {});
       throw new Error(`下拉选项中无 "${want}";可见选项: ${visibleTexts.join(" / ")}`);
     }
 

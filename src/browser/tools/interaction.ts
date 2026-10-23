@@ -47,7 +47,20 @@ export async function clickTool(config: BrowserConfig, args: Record<string, any>
       clickedHuman = await humanClick(page, target, { speed: config.humanizeSpeed });
     }
     if (!clickedHuman) {
-      await target.click({ timeout: args.timeoutMs ?? config.timeoutMs, force: args.force === true });
+      const explicitTimeout = args.timeoutMs !== undefined;
+      const timeoutMs = explicitTimeout ? Number(args.timeoutMs) : (config.timeoutMs ?? 30000);
+      // 快速探测与稳妥重试：若未显式指定长超时，先尝试 5s 快速探测；若因浮层遮挡或微动画导致超时，
+      // 自动降级为 force: true 重试，避免白等 30s。
+      try {
+        const firstTimeout = explicitTimeout ? timeoutMs : Math.min(timeoutMs, 5000);
+        await target.click({ timeout: firstTimeout, force: args.force === true });
+      } catch (firstErr) {
+        if (!explicitTimeout && args.force !== true) {
+          await target.click({ timeout: 3000, force: true });
+        } else {
+          throw firstErr;
+        }
+      }
     }
   } catch (e) {
     // 2. 适配器动作异常自愈 (例如遮罩层拦截与动画恢复)
@@ -146,6 +159,43 @@ export async function typeTool(config: BrowserConfig, args: Record<string, any>)
 export async function pressTool(config: BrowserConfig, args: Record<string, any>) {
   const page = await getPage(config);
   const key = String(args.key);
+  let warning: string | undefined;
+
+  // Escape 保护逻辑：当用户未指定具体 selector/ref 全局按 Escape 时，
+  // 检查是否可能误关带有 closeOnEsc 的 Modal/Dialog
+  if (key === "Escape" && args.selector === undefined && args.ref === undefined) {
+    const checkState = await page
+      .evaluate(() => {
+        const dialogSelector =
+          "[role='dialog']:not([aria-hidden='true']), [role='alertdialog']:not([aria-hidden='true']), [aria-modal='true']:not([aria-hidden='true']), dialog[open]";
+        const dropdownSelector =
+          "[role='listbox']:not([aria-hidden='true']), [role='combobox'][aria-expanded='true'], [aria-expanded='true']";
+        const hasModal = Boolean(document.querySelector(dialogSelector));
+        const hasOpenDropdown = Boolean(document.querySelector(dropdownSelector));
+        return { hasModal, hasOpenDropdown };
+      })
+      .catch(() => ({ hasModal: false, hasOpenDropdown: false }));
+
+    if (checkState.hasModal) {
+      if (checkState.hasOpenDropdown) {
+        // 如果页面上有还展开着的下拉浮层，优先通过失焦收起下拉，
+        // 避免全局 Escape 冒泡给 Modal 的 document 监听导致整单关闭！
+        await page
+          .evaluate(() => {
+            if (document.activeElement instanceof HTMLElement) {
+              document.activeElement.blur();
+            }
+          })
+          .catch(() => {});
+        warning =
+          "检测到活动弹窗且存在展开的下拉浮层。已优先收起浮层并阻止 Escape 事件冒泡关闭整个弹窗。";
+      } else {
+        warning =
+          "检测到页面存在活动弹窗 [modal: closeOnEsc]，按全局 Escape 可能导致弹窗及其表单被关闭。若需关闭指定元素请传 selector/ref。";
+      }
+    }
+  }
+
   if (args.selector !== undefined || args.ref !== undefined) {
     const target = await targetLocator(page, args);
     await target.press(key, {
@@ -154,7 +204,11 @@ export async function pressTool(config: BrowserConfig, args: Record<string, any>
   } else {
     await page.keyboard.press(key);
   }
-  return { pressed: key, ...(await pageIdentity(page)) };
+  return {
+    pressed: key,
+    ...(warning ? { warning } : {}),
+    ...(await pageIdentity(page)),
+  };
 }
 
 
@@ -207,7 +261,7 @@ export async function downloadTool(config: BrowserConfig, args: Record<string, a
   let recentDownloads = downloadsOf(currentProfile);
   // wait:true 时以当前下载数为基线,轮询等待新下载出现,消除 browser_wait 盲等。
   if (args.wait === true) {
-    const timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? 10_000) || 10_000, 1_000), 60_000);
+    const timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? 30_000) || 30_000, 1_000), 120_000);
     const baseline = recentDownloads.length;
     const deadline = Date.now() + timeoutMs;
     while (recentDownloads.length <= baseline && Date.now() < deadline) {
@@ -215,7 +269,9 @@ export async function downloadTool(config: BrowserConfig, args: Record<string, a
       recentDownloads = downloadsOf(currentProfile);
     }
     if (recentDownloads.length <= baseline) {
-      throw new Error(`等待下载超时(${timeoutMs}ms):未检测到新下载,请先在页面触发下载动作`);
+      throw new Error(
+        `等待下载超时(${timeoutMs}ms): 未检测到新下载触发事件。可能原因: 1) 前端未成功触发下载接口（可调用 browser_network 查询是否有导出请求及 4xx/5xx）；2) 后端文件生成耗时较长（可传更大的 timeoutMs 参数重试，如 { wait: true, timeoutMs: 60000 }）。`,
+      );
     }
   }
   if (recentDownloads.length === 0) {

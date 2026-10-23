@@ -83,4 +83,15 @@ describe("lcsScore / topSuggestions", () => {
   it("无相近候选返回空数组", () => {
     expect(topSuggestions("zzz", [{ role: "button", name: "提交" }])).toEqual([]);
   });
+
+  it("去空白归一化支持: 导 出 能被 导出 计分匹配", () => {
+    // 针对 antd 按钮中间空格 (Two-word button)
+    const out = topSuggestions("导出", [
+      { role: "button", name: "导 出" },
+      { role: "button", name: "确 定" },
+      { role: "button", name: "取 消" },
+    ]);
+    expect(out.length).toBeGreaterThan(0);
+    expect(out[0].name).toBe("导 出");
+  });
 });

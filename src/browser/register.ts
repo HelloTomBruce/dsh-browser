@@ -24,7 +24,8 @@ import { getRecorderTools } from "./definitions/recorder.js";
 import { getExtractTools } from "./definitions/extract.js";
 
 export function registerTools(ctx: ReefContext, config: BrowserConfig) {
-  const tools = ctx.get<{ register(definition: PlainToolDefinition): unknown }>("tools");
+  const tools =
+    ctx.get<{ register(definition: PlainToolDefinition): unknown }>("tools") ?? (ctx as any).tools;
   if (tools === undefined) return;
   setToolsLogger((m) => ctx.logger?.info?.(m));
   const timeout = (ms?: number) => ms ?? config.timeoutMs ?? 30000;

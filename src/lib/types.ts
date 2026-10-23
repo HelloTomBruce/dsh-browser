@@ -5,6 +5,7 @@ export interface ReefContext {
   get<T = any>(name: string): T | undefined;
   effect(fn: () => (() => void) | void, label?: string): void;
   on?(event: string, listener: (...args: unknown[]) => unknown): (() => void) | void;
+  inject?(names: string[], callback: (ctx: ReefContext) => void): unknown;
   logger?: {
     info?: (message: string) => void;
     warn?: (message: string) => void;
