@@ -52,31 +52,12 @@ export declare function confirmTool(config: BrowserConfig, args: Record<string, 
     waitedMs: number;
     detail: string;
 }>;
-/** auto 模式默认敏感文本模式(提交/删除/支付类)。 */
-export declare const DEFAULT_SENSITIVE_PATTERNS: string[];
-/** auto 模式默认参与判定的工具(已决:只拦 browser_click,type 误报率高)。 */
-export declare const DEFAULT_SENSITIVE_TOOLS: string[];
-/** 敏感判定的元素描述(与 walker describeElement 字段子集对应)。 */
-export interface SensitiveDesc {
-    role: string;
-    name: string;
-    text: string;
-    id: string;
-    testid: string;
-    tag: string;
-}
+import { sensitiveHits, DEFAULT_SENSITIVE_PATTERNS, DEFAULT_SENSITIVE_TOOLS, type SensitiveDesc } from "../policy/engine.js";
+export { sensitiveHits, DEFAULT_SENSITIVE_PATTERNS, DEFAULT_SENSITIVE_TOOLS, type SensitiveDesc };
 /**
- * 纯逻辑:元素描述命中了哪些敏感模式(role/name/text/id/testid/tag 拼接后
- * 子串匹配,大小写不敏感;空白模式忽略)。返回命中的模式列表(空 = 放行)。
- * 导出供测试。
- */
-export declare function sensitiveHits(desc: SensitiveDesc | null, patterns: string[]): string[];
-/**
- * auto 模式审批闸:命中敏感模式时经 confirmTool 弹审批等待用户决策,
- * 拒绝/超时抛错(调用方该步失败),允许则返回继续执行原工具。
- * 不满足前置条件(非 auto / 工具不在 sensitiveTools / 无模式 / 无活动页 /
- * 无目标 selector / 页内取描述失败)一律直接放行,由原工具自行处理错误。
- * page 参数仅供测试注入;缺省取当前活动页。
+ * 策略引擎审批闸: 命中 auto 级别策略时经 confirmTool 弹审批等待用户决策,
+ * 拒绝/超时抛错(调用方该步失败), 允许则返回继续执行原工具。
+ * page 参数仅供测试注入; 缺省取当前活动页。
  */
 export declare function confirmGate(config: BrowserConfig, tool: string, args: Record<string, any>, page?: Page | null): Promise<void>;
 //# sourceMappingURL=collaboration.d.ts.map

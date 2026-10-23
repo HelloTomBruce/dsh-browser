@@ -1,5 +1,5 @@
 import type { Page } from "playwright-core";
-import type { ActionContext, ActionResult, FormFieldItem, SelectContext, SelectResult, UIAdapter } from "./types.js";
+import type { ActionContext, ActionResult, FormFieldItem, SelectContext, SelectResult, UIAdapter, VirtualExtractOptions } from "./types.js";
 declare class UIAdapterRegistryImpl {
     private adapters;
     private pageAdapterCache;
@@ -41,6 +41,12 @@ declare class UIAdapterRegistryImpl {
         handled: boolean;
         error?: string;
     }>;
+    fillDate(ctx: ActionContext, field: string, dateValue: string | [string, string]): Promise<boolean>;
+    selectPath(ctx: ActionContext, field: string, path: string[]): Promise<boolean>;
+    transferItems(ctx: ActionContext, selector: string, direction: "left" | "right", items: string[]): Promise<boolean>;
+    extractVirtualList(page: Page, options: VirtualExtractOptions): Promise<Record<string, any>[]>;
+    fillEditorContent(ctx: ActionContext, selector: string, content: string): Promise<boolean>;
+    dragAndDrop(ctx: ActionContext, sourceSelector: string, targetSelector: string): Promise<boolean>;
 }
 export declare const adapterRegistry: UIAdapterRegistryImpl;
 export {};

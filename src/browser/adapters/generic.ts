@@ -4,12 +4,20 @@ import type { Page } from "playwright-core";
 import { withTimeout } from "../tools/common.js";
 import { waitForDOMQuiescence } from "./quiescence.js";
 import type {
+  ActionContext,
   FormFieldItem,
   QuiescenceOptions,
   SelectContext,
   SelectResult,
   UIAdapter,
+  VirtualExtractOptions,
 } from "./types.js";
+import { fillDateRangeHelper } from "./modules/temporal.js";
+import { selectPathHelper } from "./modules/hierarchy.js";
+import { transferItemsHelper } from "./modules/transfer.js";
+import { extractVirtualListHelper } from "./modules/virtual.js";
+import { fillEditorHelper } from "./modules/editor.js";
+import { dragAndDropHelper } from "./modules/drag.js";
 
 export class GenericAdapter implements UIAdapter {
   readonly name = "generic";
@@ -187,5 +195,34 @@ export class GenericAdapter implements UIAdapter {
     }
 
     return { handled: false };
+  }
+
+  async fillDate(ctx: ActionContext, field: string, dateValue: string | [string, string]): Promise<boolean> {
+    return fillDateRangeHelper(ctx.page, field, dateValue);
+  }
+
+  async selectPath(ctx: ActionContext, field: string, path: string[]): Promise<boolean> {
+    return selectPathHelper(ctx.page, field, path);
+  }
+
+  async transferItems(
+    ctx: ActionContext,
+    selector: string,
+    direction: "left" | "right",
+    items: string[],
+  ): Promise<boolean> {
+    return transferItemsHelper(ctx.page, selector, direction, items);
+  }
+
+  async extractVirtualList(page: Page, options: VirtualExtractOptions): Promise<Record<string, any>[]> {
+    return extractVirtualListHelper(page, options);
+  }
+
+  async fillEditorContent(ctx: ActionContext, selector: string, content: string): Promise<boolean> {
+    return fillEditorHelper(ctx.page, selector, content);
+  }
+
+  async dragAndDrop(ctx: ActionContext, sourceSelector: string, targetSelector: string): Promise<boolean> {
+    return dragAndDropHelper(ctx.page, sourceSelector, targetSelector);
   }
 }

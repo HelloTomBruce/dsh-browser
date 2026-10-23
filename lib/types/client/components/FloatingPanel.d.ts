@@ -7,6 +7,7 @@ interface FloatingPanelProps {
     rerunMsg: string;
     pendingConfirm: PendingConfirm | null;
     shotSrc: string;
+    streamSrc?: string;
     dark: boolean;
     palette: Palette;
     onOpenModal: () => void;
@@ -14,7 +15,7 @@ interface FloatingPanelProps {
     onConfirmDecision: (decision: "allowed" | "denied") => void;
     onRerunLast: () => void;
 }
-export declare function FloatingPanel({ status, ops, lastRun, agentBusy, rerunMsg, pendingConfirm, shotSrc, dark, palette: p, onOpenModal, onOpenReport, onConfirmDecision, onRerunLast, }: FloatingPanelProps): import("react").DetailedReactHTMLElement<{
+export declare function FloatingPanel({ status, ops, lastRun, agentBusy, rerunMsg, pendingConfirm, shotSrc, streamSrc, dark, palette: p, onOpenModal, onOpenReport, onConfirmDecision, onRerunLast, }: FloatingPanelProps): import("react").DetailedReactHTMLElement<{
     style: {
         position: "fixed";
         right: string;

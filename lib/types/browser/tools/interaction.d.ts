@@ -3,12 +3,19 @@ import type { BrowserConfig } from "../types.js";
 import { targetLocator, resolveTargetLocator } from "../session.js";
 import type { FormFillResult } from "../adapters/types.js";
 export { targetLocator, resolveTargetLocator };
+export declare function isBotSensitiveUrl(url: string): boolean;
 export declare function clickTool(config: BrowserConfig, args: Record<string, any>): Promise<{
     url: string;
     title: string;
     clicked: string;
 }>;
 export declare function typeTool(config: BrowserConfig, args: Record<string, any>): Promise<{
+    url: string;
+    title: string;
+    typed: boolean;
+    editor: boolean;
+    selector: string;
+} | {
     url: string;
     title: string;
     typed: boolean;
@@ -107,4 +114,18 @@ export declare function formsTool(args: Record<string, any>): Promise<{
  * 智能批量表单填写: 一次调用自动识别并填充多个表单控件, 结合 UI 适配器自动处理输入/选择与弹层
  */
 export declare function formFillTool(config: BrowserConfig, args: Record<string, any>): Promise<FormFillResult>;
+export declare function transferTool(config: BrowserConfig, args: Record<string, any>): Promise<{
+    url: string;
+    title: string;
+    transferred: boolean;
+    direction: "left" | "right";
+    items: string[];
+}>;
+export declare function dragTool(config: BrowserConfig, args: Record<string, any>): Promise<{
+    url: string;
+    title: string;
+    dragged: boolean;
+    source: string;
+    target: string;
+}>;
 //# sourceMappingURL=interaction.d.ts.map

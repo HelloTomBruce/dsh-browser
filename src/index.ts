@@ -55,6 +55,9 @@ const SCHEMA: ConfigSchema = {
   confirmTimeoutMs: { type: "number", min: 1000 },
   sensitivePatterns: { type: "string[]" },
   sensitiveTools: { type: "string[]" },
+  confirmPolicies: { type: "any", optional: true },
+  humanize: { type: "any", optional: true },
+  humanizeSpeed: { type: "string", enum: ["slow", "normal", "fast"], optional: true },
   confirmInReplay: { type: "boolean" },
   toolset: { type: "string", enum: ["core", "all"] },
 };

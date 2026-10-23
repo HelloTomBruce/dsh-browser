@@ -1,5 +1,5 @@
 import type { Page } from "playwright-core";
-import type { FormFieldItem, QuiescenceOptions, SelectContext, SelectResult, UIAdapter } from "./types.js";
+import type { ActionContext, FormFieldItem, QuiescenceOptions, SelectContext, SelectResult, UIAdapter, VirtualExtractOptions } from "./types.js";
 export declare class GenericAdapter implements UIAdapter {
     readonly name = "generic";
     /** 通用 W3C 标准弹窗选择器 */
@@ -18,5 +18,11 @@ export declare class GenericAdapter implements UIAdapter {
         handled: boolean;
         error?: string;
     }>;
+    fillDate(ctx: ActionContext, field: string, dateValue: string | [string, string]): Promise<boolean>;
+    selectPath(ctx: ActionContext, field: string, path: string[]): Promise<boolean>;
+    transferItems(ctx: ActionContext, selector: string, direction: "left" | "right", items: string[]): Promise<boolean>;
+    extractVirtualList(page: Page, options: VirtualExtractOptions): Promise<Record<string, any>[]>;
+    fillEditorContent(ctx: ActionContext, selector: string, content: string): Promise<boolean>;
+    dragAndDrop(ctx: ActionContext, sourceSelector: string, targetSelector: string): Promise<boolean>;
 }
 //# sourceMappingURL=generic.d.ts.map

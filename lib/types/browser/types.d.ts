@@ -55,6 +55,12 @@ export interface BrowserConfig {
      * 需要拦输入类动作时显式加入)。
      */
     sensitiveTools?: string[];
+    /** 多维环境与路径自适应策略规则链 (v0.6 Policy Engine) */
+    confirmPolicies?: import("./policy/types.js").PolicyRule[];
+    /** 拟人化操作引擎: auto(遇风控/登录页自动激活) | true(全局开启) | false(默认关闭) */
+    humanize?: boolean | "auto";
+    /** 拟人化操作速率: slow | normal (默认) | fast */
+    humanizeSpeed?: "slow" | "normal" | "fast";
     /**
      * replay/batch 是否同样走 auto 审批闸(默认 true)。设为 false 表示回放
      * 不再弹审批 —— 数据驱动/定时回归的逃生口,风险自担(见 README)。

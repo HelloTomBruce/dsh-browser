@@ -1,6 +1,7 @@
 // dsh-browser · 常驻 Dev 控制器服务 (完整能力版)
 import http from "node:http";
-import { resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve, extname } from "node:path";
 import { closeBrowser, getPage } from "../src/browser/session.js";
 import {
   clickTool,
@@ -12,7 +13,12 @@ import {
   selectTool,
   snapshotTool,
   typeTool,
+  transferTool,
+  dragTool,
+  extractTool,
 } from "../src/browser/tools.js";
+import { screencastManager } from "../src/browser/session/screencast.js";
+import { sessionTracer } from "../src/browser/session/tracer.js";
 import type { BrowserConfig } from "../src/browser/types.js";
 
 const config: BrowserConfig = {
@@ -66,17 +72,67 @@ async function readJson(req: http.IncomingMessage): Promise<any> {
   });
 }
 
+async function runWithTrace<T>(toolName: string, body: any, fn: () => Promise<T>): Promise<T> {
+  const page = await getPage(config);
+  sessionTracer.startStep("default", toolName, body, page);
+  try {
+    const res = await fn();
+    await sessionTracer.endStep("default", true, undefined, page);
+    return res;
+  } catch (err: any) {
+    await sessionTracer.endStep("default", false, err.message, page);
+    throw err;
+  }
+}
+
+function startStaticPlaygroundServer(port: number): Promise<http.Server | null> {
+  const mimeMap: Record<string, string> = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".json": "application/json",
+  };
+  const distDir = resolve("playground/dist");
+  return new Promise((res) => {
+    const s = http.createServer((req, resp) => {
+      const urlPath = req.url?.split("?")[0] || "/";
+      let filePath = resolve(distDir, urlPath === "/" ? "index.html" : `.${urlPath}`);
+      if (urlPath === "/iframe-subpage.html") {
+        filePath = resolve("playground/iframe-subpage.html");
+      }
+      if (existsSync(filePath)) {
+        const ext = extname(filePath);
+        resp.writeHead(200, { "Content-Type": mimeMap[ext] || "application/octet-stream" });
+        resp.end(readFileSync(filePath));
+      } else {
+        resp.writeHead(404);
+        resp.end(`Not Found: ${urlPath}`);
+      }
+    });
+    s.once("error", () => res(null));
+    s.listen(port, () => res(s));
+  });
+}
+
 async function startServer() {
   const PORT = Number(process.env.PORT) || 9527;
   const initialUrl = process.argv[2] || process.env.URL || "http://127.0.0.1:5173";
+
+  // 若目标为 5173，自动开启零依赖静态托管 Playground
+  if (initialUrl.includes("5173")) {
+    const srv = await startStaticPlaygroundServer(5173);
+    if (srv) {
+      console.log(`📦 Playground 静态托管已自启: http://127.0.0.1:5173`);
+    }
+  }
 
   console.log("=================================================");
   console.log("🚀 dsh-browser 完整能力控制器启动中...");
   console.log(`🌐 目标页面: ${initialUrl}`);
   console.log(`🔌 控制端点: http://127.0.0.1:${PORT}`);
   console.log("=================================================\n");
-
-  await openTool(config, { url: initialUrl, waitUntil: "domcontentloaded" });
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://127.0.0.1:${PORT}`);
@@ -120,25 +176,25 @@ async function startServer() {
 
       if (pathname === "/click" && req.method === "POST") {
         const body = await readJson(req);
-        const clickRes = await clickTool(config, body);
+        const clickRes = await runWithTrace("browser_click", body, () => clickTool(config, body));
         return sendJson(res, 200, clickRes);
       }
 
       if (pathname === "/type" && req.method === "POST") {
         const body = await readJson(req);
-        const typeRes = await typeTool(config, body);
+        const typeRes = await runWithTrace("browser_type", body, () => typeTool(config, body));
         return sendJson(res, 200, typeRes);
       }
 
       if (pathname === "/select" && req.method === "POST") {
         const body = await readJson(req);
-        const selRes = await selectTool(config, body);
+        const selRes = await runWithTrace("browser_select", body, () => selectTool(config, body));
         return sendJson(res, 200, selRes);
       }
 
       if (pathname === "/fill" && req.method === "POST") {
         const body = await readJson(req);
-        const fillRes = await formFillTool(config, body);
+        const fillRes = await runWithTrace("browser_fill", body, () => formFillTool(config, body));
         return sendJson(res, 200, fillRes);
       }
 
@@ -207,6 +263,54 @@ async function startServer() {
         const name = body.name || `shot-${Date.now()}.png`;
         const shotRes = await screenshotTool(config, { name }, exec);
         return sendJson(res, 200, shotRes);
+      }
+
+      if (pathname === "/transfer" && req.method === "POST") {
+        const body = await readJson(req);
+        const transRes = await runWithTrace("browser_transfer", body, () => transferTool(config, body));
+        return sendJson(res, 200, transRes);
+      }
+
+      if (pathname === "/drag" && req.method === "POST") {
+        const body = await readJson(req);
+        const dragRes = await runWithTrace("browser_drag", body, () => dragTool(config, body));
+        return sendJson(res, 200, dragRes);
+      }
+
+      if (pathname === "/extract" && req.method === "POST") {
+        const body = await readJson(req);
+        const extRes = await runWithTrace("browser_extract", body, () => extractTool(config, body, exec));
+        return sendJson(res, 200, extRes);
+      }
+
+      if (pathname === "/timeline" && req.method === "GET") {
+        return sendJson(res, 200, {
+          traces: sessionTracer.getTraces("default"),
+        });
+      }
+
+      if (pathname === "/stream" && req.method === "GET") {
+        res.writeHead(200, {
+          "content-type": "multipart/x-mixed-replace; boundary=--frame",
+          "cache-control": "no-cache, no-transform",
+          connection: "keep-alive",
+          "x-accel-buffering": "no",
+        });
+
+        const unsubscribe = screencastManager.subscribe((frame) => {
+          try {
+            res.write(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.buffer.length}\r\n\r\n`);
+            res.write(frame.buffer);
+            res.write("\r\n");
+          } catch {
+            /* closed */
+          }
+        });
+
+        req.on("close", () => {
+          unsubscribe();
+        });
+        return;
       }
 
       if (pathname === "/close" && req.method === "POST") {

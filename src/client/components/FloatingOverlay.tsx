@@ -48,6 +48,7 @@ export function BrowserFloatingOverlay() {
   }, [modalOpen, base]);
 
   const shotSrc = `${base}/screenshot?v=${shotVersion}`;
+  const streamSrc = `${base}/stream`;
 
   return createElement(
     "div",
@@ -99,6 +100,7 @@ export function BrowserFloatingOverlay() {
         rerunMsg,
         pendingConfirm,
         shotSrc,
+        streamSrc,
         dark,
         palette: p,
         onOpenModal: () => setModalOpen(true),
@@ -114,6 +116,7 @@ export function BrowserFloatingOverlay() {
         status,
         history,
         shotSrc,
+        streamSrc,
         dark,
         palette: p,
         onClose: () => setModalOpen(false),

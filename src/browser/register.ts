@@ -2,7 +2,8 @@
 import type { ReefContext, PlainToolDefinition, ToolRunContext } from "../lib/types.js";
 import type { BrowserConfig } from "./types.js";
 import { setToolsLogger } from "../lib/tools.js";
-import { recordCall, isRecording, activePage, noteAgentAction, pageRef, noteToolStart, noteToolEnd } from "./session.js";
+import { recordCall, isRecording, activePage, noteAgentAction, pageRef, noteToolStart, noteToolEnd, currentProfile } from "./session.js";
+import { sessionTracer } from "./session/tracer.js";
 import {
   openTool, snapshotTool, clickTool, typeTool, pressTool, selectTool, evalTool,
   screenshotTool, waitTool, backTool, reloadTool,
@@ -43,7 +44,10 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
    * 可关,README 注明风险)。未命中模式时闸内只花一次页内 evaluate。
    */
   const replayGate = (tool: string, fn: (a: any) => Promise<unknown>) => async (a: any) => {
-    if (config.confirmMode === "auto" && config.confirmInReplay !== false) {
+    if (
+      (config.confirmMode === "auto" || (config.confirmPolicies && config.confirmPolicies.length > 0)) &&
+      config.confirmInReplay !== false
+    ) {
       await confirmGate(config, tool, a);
     }
     return fn(a);
@@ -72,9 +76,10 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
       noteToolStart();
       const domTool = AGENT_DOM_TOOLS.has(def.name);
       if (domTool) noteAgentAction();
-      if (config.confirmMode === "auto") {
+      if (config.confirmMode === "auto" || (config.confirmPolicies && config.confirmPolicies.length > 0)) {
         await confirmGate(config, def.name, args);
       }
+      sessionTracer.startStep(currentProfile, def.name, args, activePage());
       if (PREVIEW_TOOLS.has(def.name)) {
         const page = activePage();
         const selector =
@@ -90,6 +95,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
       }
       try {
         const result = await original(args, exec);
+        void sessionTracer.endStep(currentProfile, true, undefined, activePage());
         const call = recordCall({ tool: def.name, args, ok: true, ms: Date.now() - t0, ts: Date.now() });
         if (isRecording() && SELECTOR_STEP_TOOLS.has(def.name) && typeof args?.selector === "string") {
           const page = activePage();
@@ -100,6 +106,12 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
         }
         return result;
       } catch (error) {
+        void sessionTracer.endStep(
+          currentProfile,
+          false,
+          error instanceof Error ? error.message : String(error),
+          activePage(),
+        );
         recordCall({
           tool: def.name,
           args,

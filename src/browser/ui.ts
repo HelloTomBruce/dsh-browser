@@ -7,6 +7,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ReefContext, WebRoute } from "../lib/types.js";
 import type { BrowserConfig } from "./types.js";
 import { activePage, historyOf, currentProfile, testLogOf, currentPause, getPendingConfirm, resolveConfirm, activeToolCalls } from "./session.js";
+import { screencastManager } from "./session/screencast.js";
+import { sessionTracer } from "./session/tracer.js";
 import { statusTool, runPanelRerun, getRerunHandler, rerunBusy } from "./tools.js";
 import { listRecordings, recordingDetail, deleteRecording } from "./recordings.js";
 import { latestRun, listRuns, renderHtmlReport } from "./reports.js";
@@ -55,6 +57,14 @@ export function registerBrowserApi(ctx: ReefContext, config: BrowserConfig, base
           sendJson(res, 200, {
             profile: currentProfile,
             calls: testLogOf().slice(0, 50).map((c) => ({ ...c, args: truncateForDisplay(c.args) })),
+          });
+          return;
+        }
+        if (path === `${base}/timeline`) {
+          // F4 全景时光机: 单步时间轴、Console 日志与网络失败链路
+          sendJson(res, 200, {
+            profile: currentProfile,
+            traces: sessionTracer.getTraces(currentProfile),
           });
           return;
         }
@@ -165,6 +175,63 @@ export function registerBrowserApi(ctx: ReefContext, config: BrowserConfig, base
           }
           // 当前待审批请求(等待期间面板展示允许/拒绝按钮)。
           sendJson(res, 200, { confirm: getPendingConfirm() });
+          return;
+        }
+        if (path === `${base}/stream`) {
+          const page = activePage();
+          if (page === null || page.isClosed()) {
+            sendText(res, 404, "browser not open");
+            return;
+          }
+          const accept = req.headers.accept || "";
+          const isSSE = accept.includes("text/event-stream") || Boolean(req.url?.includes("sse=1"));
+
+          if (isSSE) {
+            res.writeHead(200, {
+              "content-type": "text/event-stream",
+              "cache-control": "no-cache, no-transform",
+              connection: "keep-alive",
+              "x-accel-buffering": "no",
+            });
+            res.write("retry: 1000\n\n");
+
+            const unsubscribe = screencastManager.subscribe((frame) => {
+              try {
+                res.write(
+                  `data: ${JSON.stringify({ frame: frame.base64, metadata: frame.metadata, timestamp: frame.timestamp })}\n\n`,
+                );
+              } catch {
+                /* closed */
+              }
+            });
+
+            req.on("close", () => {
+              unsubscribe();
+            });
+            return;
+          }
+
+          // Default: multipart/x-mixed-replace (MJPEG 流)
+          res.writeHead(200, {
+            "content-type": "multipart/x-mixed-replace; boundary=--frame",
+            "cache-control": "no-cache, no-transform",
+            connection: "keep-alive",
+            "x-accel-buffering": "no",
+          });
+
+          const unsubscribe = screencastManager.subscribe((frame) => {
+            try {
+              res.write(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.buffer.length}\r\n\r\n`);
+              res.write(frame.buffer);
+              res.write("\r\n");
+            } catch {
+              /* closed */
+            }
+          });
+
+          req.on("close", () => {
+            unsubscribe();
+          });
           return;
         }
         if (path === `${base}/screenshot`) {

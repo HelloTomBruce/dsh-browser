@@ -7,6 +7,7 @@ interface InspectionModalProps {
   status: BrowserStatus | null;
   history: NavHistoryItem[];
   shotSrc: string;
+  streamSrc?: string;
   dark: boolean;
   palette: Palette;
   onClose: () => void;
@@ -16,6 +17,7 @@ export function InspectionModal({
   status,
   history,
   shotSrc,
+  streamSrc,
   dark,
   palette: p,
   onClose,
@@ -104,10 +106,15 @@ export function InspectionModal({
           "✕",
         ),
       ),
-      // Large Screenshot
+      // Large Live Stream / Screenshot
       status?.open
         ? createElement("img", {
-            src: shotSrc,
+            src: streamSrc || shotSrc,
+            onError: (e: any) => {
+              if (e.currentTarget.src !== shotSrc) {
+                e.currentTarget.src = shotSrc;
+              }
+            },
             alt: "浏览器大图",
             style: {
               width: "100%",

@@ -91,8 +91,16 @@ export interface FormFillResult {
   submitted?: boolean;
 }
 
+/** 虚拟滚动长列表抽取选项 */
+export interface VirtualExtractOptions {
+  scope?: string;
+  fields: Record<string, string>;
+  maxRows: number;
+  stepPixels?: number;
+}
+
 /**
- * 统一组件库适配器接口 (Pluggable UI Adapter)
+ * 统一组件库适配器接口 (Pluggable UI Adapter Protocol v2)
  */
 export interface UIAdapter {
   /** 适配器唯一标识，如 "ant-design", "element-plus", "generic" */
@@ -130,4 +138,22 @@ export interface UIAdapter {
     field: FormFieldItem,
     scope?: string,
   ): Promise<{ handled: boolean; error?: string }>;
+
+  /** 1. 时序组件: 处理日期/时间/范围选择 */
+  fillDate?(ctx: ActionContext, field: string, dateValue: string | [string, string]): Promise<boolean>;
+
+  /** 2. 层级组件: 处理级联与树选择 (路径驱动) */
+  selectPath?(ctx: ActionContext, field: string, path: string[]): Promise<boolean>;
+
+  /** 3. 穿梭组件: 批量移动左/右项 */
+  transferItems?(ctx: ActionContext, selector: string, direction: "left" | "right", items: string[]): Promise<boolean>;
+
+  /** 4. 虚拟滚动: 接管长列表滚动抽取 */
+  extractVirtualList?(page: Page, options: VirtualExtractOptions): Promise<Record<string, any>[]>;
+
+  /** 5. 编辑器组件: 富文本与代码编辑器安全设值 */
+  fillEditorContent?(ctx: ActionContext, selector: string, content: string): Promise<boolean>;
+
+  /** 6. 拖拽组件: 物理轨迹跨容器拖拽 */
+  dragAndDrop?(ctx: ActionContext, sourceSelector: string, targetSelector: string): Promise<boolean>;
 }

@@ -17,8 +17,15 @@ import { extractElementLabel, getActiveDialog } from "../adapters/dom.js";
 import { adapterRegistry } from "../adapters/index.js";
 import { waitForDOMQuiescence } from "../adapters/quiescence.js";
 import type { FormFillResult } from "../adapters/types.js";
+import { humanClick } from "../stealth/mouse.js";
+import { humanType } from "../stealth/keyboard.js";
 
 export { targetLocator, resolveTargetLocator };
+
+export function isBotSensitiveUrl(url: string): boolean {
+  if (!url) return false;
+  return /login|signin|auth|captcha|challenge|turnstile|security|waf/i.test(url);
+}
 
 export async function clickTool(config: BrowserConfig, args: Record<string, any>) {
   const page = await getPage(config);
@@ -29,8 +36,19 @@ export async function clickTool(config: BrowserConfig, args: Record<string, any>
   const lifted = await adapterRegistry.beforeAction({ page, config, target, action: "click", args });
   if (lifted) target = lifted;
 
+  const isHuman =
+    args.humanize === true ||
+    (args.humanize === undefined &&
+      (config.humanize === true || (config.humanize === "auto" && isBotSensitiveUrl(page.url()))));
+
   try {
-    await target.click({ timeout: args.timeoutMs ?? config.timeoutMs, force: args.force === true });
+    let clickedHuman = false;
+    if (isHuman && args.force !== true) {
+      clickedHuman = await humanClick(page, target, { speed: config.humanizeSpeed });
+    }
+    if (!clickedHuman) {
+      await target.click({ timeout: args.timeoutMs ?? config.timeoutMs, force: args.force === true });
+    }
   } catch (e) {
     // 2. 适配器动作异常自愈 (例如遮罩层拦截与动画恢复)
     const recovered = await adapterRegistry.onActionError({ page, config, target, action: "click", args }, e as Error);
@@ -75,15 +93,46 @@ export async function typeTool(config: BrowserConfig, args: Record<string, any>)
   const page = await getPage(config);
   const target = await targetLocator(page, args);
   const text = String(args.text ?? "");
+  const isHuman =
+    args.humanize === true ||
+    (args.humanize === undefined &&
+      (config.humanize === true || (config.humanize === "auto" && isBotSensitiveUrl(page.url()))));
+
+  if (args.editor === true) {
+    const selector = String(args.ref ?? args.selector ?? "");
+    const handled = await adapterRegistry.fillEditorContent(
+      { page, config, target, action: "type", args },
+      selector,
+      text,
+    );
+    if (handled) {
+      return {
+        typed: true,
+        editor: true,
+        selector,
+        ...(await pageIdentity(page)),
+      };
+    }
+  }
+
   if (args.clear === true) {
-    await target.fill(text, { timeout: args.timeoutMs ?? config.timeoutMs });
+    if (isHuman) {
+      await target.fill("");
+      await humanType(page, text, { speed: config.humanizeSpeed });
+    } else {
+      await target.fill(text, { timeout: args.timeoutMs ?? config.timeoutMs });
+    }
   } else {
     try {
       await target.click({ timeout: Math.min(args.timeoutMs ?? config.timeoutMs, 5_000) });
     } catch {
       await target.click({ timeout: 2_000, force: true }).catch(() => {});
     }
-    await page.keyboard.type(text, { delay: args.delayMs ?? 0 });
+    if (isHuman) {
+      await humanType(page, text, { speed: config.humanizeSpeed });
+    } else {
+      await page.keyboard.type(text, { delay: args.delayMs ?? 0 });
+    }
   }
   if (args.submit === true) await page.keyboard.press("Enter");
   return {
@@ -380,5 +429,50 @@ export async function formFillTool(
     skipped,
     errors,
     ...(submitted !== undefined ? { submitted } : {}),
+  };
+}
+
+export async function transferTool(config: BrowserConfig, args: Record<string, any>) {
+  const page = await getPage(config);
+  const selector = String(args.selector ?? args.ref ?? ".ant-transfer, .el-transfer");
+  const direction = (args.direction === "left" ? "left" : "right") as "left" | "right";
+  const items = Array.isArray(args.items) ? args.items.map(String) : [];
+
+  const target = await targetLocator(page, { selector });
+  const handled = await adapterRegistry.transferItems(
+    { page, config, target, action: "click", args },
+    selector,
+    direction,
+    items,
+  );
+
+  return {
+    transferred: handled,
+    direction,
+    items,
+    ...(await pageIdentity(page)),
+  };
+}
+
+export async function dragTool(config: BrowserConfig, args: Record<string, any>) {
+  const page = await getPage(config);
+  const source = String(args.source ?? "");
+  const target = String(args.target ?? "");
+  if (!source || !target) {
+    throw new Error("drag 需要 source 与 target 选择器");
+  }
+
+  const srcLocator = await targetLocator(page, { selector: source });
+  const handled = await adapterRegistry.dragAndDrop(
+    { page, config, target: srcLocator, action: "click", args },
+    source,
+    target,
+  );
+
+  return {
+    dragged: handled,
+    source,
+    target,
+    ...(await pageIdentity(page)),
   };
 }

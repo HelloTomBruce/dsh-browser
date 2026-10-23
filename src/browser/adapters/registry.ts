@@ -10,6 +10,7 @@ import type {
   SelectContext,
   SelectResult,
   UIAdapter,
+  VirtualExtractOptions,
 } from "./types.js";
 
 class UIAdapterRegistryImpl {
@@ -147,6 +148,56 @@ class UIAdapterRegistryImpl {
     }
 
     return { handled: false, error: "未找到能处理该字段的适配器" };
+  }
+
+  async fillDate(ctx: ActionContext, field: string, dateValue: string | [string, string]): Promise<boolean> {
+    const active = await this.getActiveAdapter(ctx.page);
+    if (active.fillDate && (await active.fillDate(ctx, field, dateValue))) return true;
+    const generic = this.adapters.get("generic");
+    return generic?.fillDate ? generic.fillDate(ctx, field, dateValue) : false;
+  }
+
+  async selectPath(ctx: ActionContext, field: string, path: string[]): Promise<boolean> {
+    const active = await this.getActiveAdapter(ctx.page);
+    if (active.selectPath && (await active.selectPath(ctx, field, path))) return true;
+    const generic = this.adapters.get("generic");
+    return generic?.selectPath ? generic.selectPath(ctx, field, path) : false;
+  }
+
+  async transferItems(
+    ctx: ActionContext,
+    selector: string,
+    direction: "left" | "right",
+    items: string[],
+  ): Promise<boolean> {
+    const active = await this.getActiveAdapter(ctx.page);
+    if (active.transferItems && (await active.transferItems(ctx, selector, direction, items))) return true;
+    const generic = this.adapters.get("generic");
+    return generic?.transferItems ? generic.transferItems(ctx, selector, direction, items) : false;
+  }
+
+  async extractVirtualList(page: Page, options: VirtualExtractOptions): Promise<Record<string, any>[]> {
+    const active = await this.getActiveAdapter(page);
+    if (active.extractVirtualList) {
+      const res = await active.extractVirtualList(page, options);
+      if (res && res.length > 0) return res;
+    }
+    const generic = this.adapters.get("generic");
+    return generic?.extractVirtualList ? generic.extractVirtualList(page, options) : [];
+  }
+
+  async fillEditorContent(ctx: ActionContext, selector: string, content: string): Promise<boolean> {
+    const active = await this.getActiveAdapter(ctx.page);
+    if (active.fillEditorContent && (await active.fillEditorContent(ctx, selector, content))) return true;
+    const generic = this.adapters.get("generic");
+    return generic?.fillEditorContent ? generic.fillEditorContent(ctx, selector, content) : false;
+  }
+
+  async dragAndDrop(ctx: ActionContext, sourceSelector: string, targetSelector: string): Promise<boolean> {
+    const active = await this.getActiveAdapter(ctx.page);
+    if (active.dragAndDrop && (await active.dragAndDrop(ctx, sourceSelector, targetSelector))) return true;
+    const generic = this.adapters.get("generic");
+    return generic?.dragAndDrop ? generic.dragAndDrop(ctx, sourceSelector, targetSelector) : false;
   }
 }
 

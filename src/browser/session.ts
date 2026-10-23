@@ -14,6 +14,8 @@ export * from "./session/target.js";
 import { clearPageRefs } from "./session/cache.js";
 import { HUMAN_BINDING, handleHumanEvent, installHumanRecorder } from "./session/recorder.js";
 import { adapterRegistry } from "./adapters/index.js";
+import { sessionTracer } from "./session/tracer.js";
+import { screencastManager } from "./session/screencast.js";
 
 /** 当前活动 profile 名(默认 "default")。 */
 export let currentProfile = "default";
@@ -191,6 +193,14 @@ export function attachPage(page: Page, config: BrowserConfig): void {
         /* 响应体读取失败忽略 */
       }
     }
+    if (res.status() >= 400) {
+      sessionTracer.recordFailedRequest(profile, {
+        url: res.url(),
+        method: info.method,
+        status: res.status(),
+        timestamp: Date.now(),
+      });
+    }
     addNetworkEntry(profile, {
       url: res.url(),
       method: info.method,
@@ -207,6 +217,12 @@ export function attachPage(page: Page, config: BrowserConfig): void {
     if (req.resourceType() !== "xhr" && req.resourceType() !== "fetch") return;
     const info = pendingReqs.get(req);
     if (info === undefined) return;
+    sessionTracer.recordFailedRequest(profile, {
+      url: req.url(),
+      method: info.method,
+      error: req.failure()?.errorText ?? "failed",
+      timestamp: Date.now(),
+    });
     addNetworkEntry(profile, {
       url: req.url(),
       method: info.method,
@@ -216,6 +232,28 @@ export function attachPage(page: Page, config: BrowserConfig): void {
       startedAt: info.startedAt,
       durationMs: Date.now() - info.startedAt,
     });
+  });
+  page.on("console", (msg) => {
+    try {
+      sessionTracer.recordConsole(profile, {
+        type: msg.type(),
+        text: msg.text().slice(0, 500),
+        timestamp: Date.now(),
+      });
+    } catch {
+      /* ignore */
+    }
+  });
+  page.on("pageerror", (err) => {
+    try {
+      sessionTracer.recordConsole(profile, {
+        type: "error",
+        text: `Uncaught: ${err.message}`.slice(0, 500),
+        timestamp: Date.now(),
+      });
+    } catch {
+      /* ignore */
+    }
   });
   // 人工操作录制:exposeBinding 常驻(对后续导航生效),init script 每次导航自动
   // 重装监听;node 侧只在 recording 开启时生效。失败(旧页面已绑定等)静默忽略。
@@ -389,6 +427,7 @@ export async function tabList() {
 }
 
 export async function closeBrowser(): Promise<void> {
+  await screencastManager.stop().catch(() => {});
   namedContexts.clear();
   for (const [name, state] of profileStates) {
     const { browser, context } = state;

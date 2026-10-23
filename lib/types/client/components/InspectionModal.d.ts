@@ -4,11 +4,12 @@ interface InspectionModalProps {
     status: BrowserStatus | null;
     history: NavHistoryItem[];
     shotSrc: string;
+    streamSrc?: string;
     dark: boolean;
     palette: Palette;
     onClose: () => void;
 }
-export declare function InspectionModal({ status, history, shotSrc, dark, palette: p, onClose, }: InspectionModalProps): import("react").DetailedReactHTMLElement<{
+export declare function InspectionModal({ status, history, shotSrc, streamSrc, dark, palette: p, onClose, }: InspectionModalProps): import("react").DetailedReactHTMLElement<{
     onClick: (e: MouseEvent) => void;
     style: {
         position: "fixed";

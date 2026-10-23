@@ -12,6 +12,7 @@ interface FloatingPanelProps {
   rerunMsg: string;
   pendingConfirm: PendingConfirm | null;
   shotSrc: string;
+  streamSrc?: string;
   dark: boolean;
   palette: Palette;
   onOpenModal: () => void;
@@ -28,6 +29,7 @@ export function FloatingPanel({
   rerunMsg,
   pendingConfirm,
   shotSrc,
+  streamSrc,
   dark,
   palette: p,
   onOpenModal,
@@ -140,10 +142,15 @@ export function FloatingPanel({
           ),
         )
       : null,
-    // Live Screenshot Thumbnail
+    // Live Stream / Screenshot Thumbnail
     status?.open
       ? createElement("img", {
-          src: shotSrc,
+          src: streamSrc || shotSrc,
+          onError: (e: any) => {
+            if (e.currentTarget.src !== shotSrc) {
+              e.currentTarget.src = shotSrc;
+            }
+          },
           alt: "实时画面",
           title: "点击放大查看实时大屏与访问历史",
           onClick: onOpenModal,

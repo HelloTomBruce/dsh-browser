@@ -9,7 +9,14 @@ import type {
   SelectContext,
   SelectResult,
   UIAdapter,
+  VirtualExtractOptions,
 } from "./types.js";
+import { fillDateRangeHelper } from "./modules/temporal.js";
+import { selectPathHelper } from "./modules/hierarchy.js";
+import { transferItemsHelper } from "./modules/transfer.js";
+import { extractVirtualListHelper } from "./modules/virtual.js";
+import { fillEditorHelper } from "./modules/editor.js";
+import { dragAndDropHelper } from "./modules/drag.js";
 
 export class AntDesignAdapter implements UIAdapter {
   readonly name = "ant-design";
@@ -311,7 +318,21 @@ export class AntDesignAdapter implements UIAdapter {
             return { handled: true };
           }
 
-          // B. 开关控件 .ant-switch
+          // B. 日期与范围选择器 .ant-picker
+          const antPicker = item.locator(".ant-picker").first();
+          if ((await antPicker.count().catch(() => 0)) > 0) {
+            const handled = await fillDateRangeHelper(page, antPicker, value as any);
+            if (handled) return { handled: true };
+          }
+
+          // C. 级联选择器 .ant-cascader
+          const antCascader = item.locator(".ant-cascader, .ant-cascader-picker").first();
+          if ((await antCascader.count().catch(() => 0)) > 0 && Array.isArray(value)) {
+            const handled = await selectPathHelper(page, antCascader, value);
+            if (handled) return { handled: true };
+          }
+
+          // D. 开关控件 .ant-switch
           const antSwitch = item.locator(".ant-switch").first();
           if ((await antSwitch.count().catch(() => 0)) > 0) {
             const isChecked = await antSwitch
@@ -323,7 +344,7 @@ export class AntDesignAdapter implements UIAdapter {
             return { handled: true };
           }
 
-          // C. 普通输入框 / 文本域 / 数字输入框
+          // E. 普通输入框 / 文本域 / 数字输入框
           const input = item.locator("input, textarea").first();
           if ((await input.count().catch(() => 0)) > 0) {
             await input.fill(String(value));
@@ -336,5 +357,34 @@ export class AntDesignAdapter implements UIAdapter {
     }
 
     return { handled: false };
+  }
+
+  async fillDate(ctx: ActionContext, field: string, dateValue: string | [string, string]): Promise<boolean> {
+    return fillDateRangeHelper(ctx.page, field, dateValue);
+  }
+
+  async selectPath(ctx: ActionContext, field: string, path: string[]): Promise<boolean> {
+    return selectPathHelper(ctx.page, field, path);
+  }
+
+  async transferItems(
+    ctx: ActionContext,
+    selector: string,
+    direction: "left" | "right",
+    items: string[],
+  ): Promise<boolean> {
+    return transferItemsHelper(ctx.page, selector, direction, items);
+  }
+
+  async extractVirtualList(page: Page, options: VirtualExtractOptions): Promise<Record<string, any>[]> {
+    return extractVirtualListHelper(page, options);
+  }
+
+  async fillEditorContent(ctx: ActionContext, selector: string, content: string): Promise<boolean> {
+    return fillEditorHelper(ctx.page, selector, content);
+  }
+
+  async dragAndDrop(ctx: ActionContext, sourceSelector: string, targetSelector: string): Promise<boolean> {
+    return dragAndDropHelper(ctx.page, sourceSelector, targetSelector);
   }
 }

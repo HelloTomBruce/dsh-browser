@@ -8,6 +8,7 @@ import { workspaceBaseDir } from "../../lib/tools.js";
 import { injectWalker } from "../walker.js";
 import { formatFromFile, serializeRows } from "../extract.js";
 import { workspaceFilePath } from "./common.js";
+import { adapterRegistry } from "../adapters/index.js";
 
 export interface ExtractField {
   name: string;
@@ -268,32 +269,55 @@ export async function extractTool(config: BrowserConfig, args: Record<string, an
 
   const rows: Record<string, any>[] = [];
   let pages = 0;
-  for (;;) {
-    const result = await page.evaluate(extractFieldsInPage, fields);
-    rows.push(...rowsOfExtract(result, fields));
-    pages++;
-    if (rows.length >= maxRows) break;
-    const nextSel = typeof args.next === "string" && args.next !== "" ? args.next : null;
-    if (nextSel === null || pages >= maxPages) break;
-    const next = page.locator(nextSel).first();
-    if ((await next.count().catch(() => 0)) === 0) break;
-    const usable = await next
-      .evaluate((el) => {
-        const style = getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
-        const visible = style.visibility !== "hidden" && style.display !== "none" && (rect.width > 0 || rect.height > 0);
-        const disabled =
-          (el as HTMLButtonElement).disabled === true ||
-          el.getAttribute("aria-disabled") === "true" ||
-          el.classList.contains("disabled") ||
-          el.classList.contains("ant-pagination-disabled");
-        return visible && !disabled;
-      })
-      .catch(() => false);
-    if (!usable) break;
-    await next.click();
-    await page.waitForLoadState("domcontentloaded").catch(() => {});
-    if (waitAfterMs > 0) await page.waitForTimeout(waitAfterMs);
+
+  if (args.scrollMode === "virtual") {
+    // F5 虚拟滚动逐屏抽取
+    const fieldMap: Record<string, string> = {};
+    for (const f of fields) {
+      if (Array.isArray(f.fields) && f.fields.length > 0) {
+        for (const sub of f.fields) {
+          fieldMap[sub.name] = sub.selector;
+        }
+      } else {
+        fieldMap[f.name] = f.selector;
+      }
+    }
+    const virtualRows = await adapterRegistry.extractVirtualList(page, {
+      scope: typeof args.scope === "string" ? args.scope : undefined,
+      fields: fieldMap,
+      maxRows,
+      stepPixels: typeof args.stepPixels === "number" ? args.stepPixels : 350,
+    });
+    rows.push(...virtualRows);
+    pages = 1;
+  } else {
+    for (;;) {
+      const result = await page.evaluate(extractFieldsInPage, fields);
+      rows.push(...rowsOfExtract(result, fields));
+      pages++;
+      if (rows.length >= maxRows) break;
+      const nextSel = typeof args.next === "string" && args.next !== "" ? args.next : null;
+      if (nextSel === null || pages >= maxPages) break;
+      const next = page.locator(nextSel).first();
+      if ((await next.count().catch(() => 0)) === 0) break;
+      const usable = await next
+        .evaluate((el) => {
+          const style = getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          const visible = style.visibility !== "hidden" && style.display !== "none" && (rect.width > 0 || rect.height > 0);
+          const disabled =
+            (el as HTMLButtonElement).disabled === true ||
+            el.getAttribute("aria-disabled") === "true" ||
+            el.classList.contains("disabled") ||
+            el.classList.contains("ant-pagination-disabled");
+          return visible && !disabled;
+        })
+        .catch(() => false);
+      if (!usable) break;
+      await next.click();
+      await page.waitForLoadState("domcontentloaded").catch(() => {});
+      if (waitAfterMs > 0) await page.waitForTimeout(waitAfterMs);
+    }
   }
 
   const truncated = rows.length > maxRows;

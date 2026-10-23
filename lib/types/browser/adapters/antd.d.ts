@@ -1,5 +1,5 @@
 import type { Locator, Page } from "playwright-core";
-import type { ActionContext, ActionResult, FormFieldItem, QuiescenceOptions, SelectContext, SelectResult, UIAdapter } from "./types.js";
+import type { ActionContext, ActionResult, FormFieldItem, QuiescenceOptions, SelectContext, SelectResult, UIAdapter, VirtualExtractOptions } from "./types.js";
 export declare class AntDesignAdapter implements UIAdapter {
     readonly name = "ant-design";
     /** 活动弹窗/抽屉选择器 */
@@ -28,5 +28,11 @@ export declare class AntDesignAdapter implements UIAdapter {
         handled: boolean;
         error?: string;
     }>;
+    fillDate(ctx: ActionContext, field: string, dateValue: string | [string, string]): Promise<boolean>;
+    selectPath(ctx: ActionContext, field: string, path: string[]): Promise<boolean>;
+    transferItems(ctx: ActionContext, selector: string, direction: "left" | "right", items: string[]): Promise<boolean>;
+    extractVirtualList(page: Page, options: VirtualExtractOptions): Promise<Record<string, any>[]>;
+    fillEditorContent(ctx: ActionContext, selector: string, content: string): Promise<boolean>;
+    dragAndDrop(ctx: ActionContext, sourceSelector: string, targetSelector: string): Promise<boolean>;
 }
 //# sourceMappingURL=antd.d.ts.map

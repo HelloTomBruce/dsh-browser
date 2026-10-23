@@ -229,28 +229,22 @@ export async function confirmTool(config: BrowserConfig, args: Record<string, an
 }
 
 // ---------------------------------------------------------------------------
-// F1 confirm 自动拦截(confirmMode: "auto",宿主层硬约束):
-// sensitiveTools 工具执行前解析目标 selector/ref → 页内取元素统一描述
-// (walker describeElement)→ 与 sensitivePatterns 子串匹配(大小写不敏感)
-// → 命中即复用上面的审批管线(confirmTool,弹面板卡等待允许/拒绝/超时)。
-// 未命中直接放行(一次页内 evaluate,与 preview 高亮同量级,无感知延迟)。
+// F1 confirm 自动拦截(confirmMode: "auto" 或 confirmPolicies 多维策略引擎):
+// sensitiveTools / 策略链在工具执行前解析目标 selector/ref → 页内取元素统一描述
+// (walker describeElement) → 策略规则链判定
+// → 命中即复用审批管线(confirmTool, 弹面板卡等待允许/拒绝/超时)。
+// 未命中直接放行(一次页内 evaluate, 与 preview 高亮同量级, 无感知延迟)。
 // ---------------------------------------------------------------------------
 
-/** auto 模式默认敏感文本模式(提交/删除/支付类)。 */
-export const DEFAULT_SENSITIVE_PATTERNS = ["提交", "删除", "支付"];
+import {
+  evaluatePolicy,
+  sensitiveHits,
+  DEFAULT_SENSITIVE_PATTERNS,
+  DEFAULT_SENSITIVE_TOOLS,
+  type SensitiveDesc,
+} from "../policy/engine.js";
 
-/** auto 模式默认参与判定的工具(已决:只拦 browser_click,type 误报率高)。 */
-export const DEFAULT_SENSITIVE_TOOLS = ["browser_click"];
-
-/** 敏感判定的元素描述(与 walker describeElement 字段子集对应)。 */
-export interface SensitiveDesc {
-  role: string;
-  name: string;
-  text: string;
-  id: string;
-  testid: string;
-  tag: string;
-}
+export { sensitiveHits, DEFAULT_SENSITIVE_PATTERNS, DEFAULT_SENSITIVE_TOOLS, type SensitiveDesc };
 
 /** 敏感判定的页内目标描述提取(walker 统一元素描述,构建期拼装注入)。 */
 const describeTarget = injectWalker<string, SensitiveDesc | null>((sel, w) => {
@@ -259,28 +253,9 @@ const describeTarget = injectWalker<string, SensitiveDesc | null>((sel, w) => {
 });
 
 /**
- * 纯逻辑:元素描述命中了哪些敏感模式(role/name/text/id/testid/tag 拼接后
- * 子串匹配,大小写不敏感;空白模式忽略)。返回命中的模式列表(空 = 放行)。
- * 导出供测试。
- */
-export function sensitiveHits(desc: SensitiveDesc | null, patterns: string[]): string[] {
-  if (desc === null) return [];
-  const hay = [desc.role, desc.name, desc.text, desc.id, desc.testid, desc.tag]
-    .filter((s): s is string => typeof s === "string")
-    .join(" ")
-    .toLowerCase();
-  if (hay === "") return [];
-  return patterns.filter(
-    (p) => typeof p === "string" && p.trim() !== "" && hay.includes(p.trim().toLowerCase()),
-  );
-}
-
-/**
- * auto 模式审批闸:命中敏感模式时经 confirmTool 弹审批等待用户决策,
- * 拒绝/超时抛错(调用方该步失败),允许则返回继续执行原工具。
- * 不满足前置条件(非 auto / 工具不在 sensitiveTools / 无模式 / 无活动页 /
- * 无目标 selector / 页内取描述失败)一律直接放行,由原工具自行处理错误。
- * page 参数仅供测试注入;缺省取当前活动页。
+ * 策略引擎审批闸: 命中 auto 级别策略时经 confirmTool 弹审批等待用户决策,
+ * 拒绝/超时抛错(调用方该步失败), 允许则返回继续执行原工具。
+ * page 参数仅供测试注入; 缺省取当前活动页。
  */
 export async function confirmGate(
   config: BrowserConfig,
@@ -288,33 +263,58 @@ export async function confirmGate(
   args: Record<string, any>,
   page?: Page | null,
 ): Promise<void> {
-  if (config.confirmMode !== "auto") return;
   if (tool === "browser_confirm") return; // 审批本身不拦
-  const tools = config.sensitiveTools ?? DEFAULT_SENSITIVE_TOOLS;
-  if (!tools.includes(tool)) return;
-  const patterns = config.sensitivePatterns ?? DEFAULT_SENSITIVE_PATTERNS;
-  if (patterns.length === 0) return;
+  const hasPolicies = Array.isArray(config.confirmPolicies) && config.confirmPolicies.length > 0;
+  if (config.confirmMode !== "auto" && !hasPolicies) return;
+
   const active = page !== undefined ? page : activePage();
   if (active === null || active === undefined) return;
+
   const sel =
     typeof args?.selector === "string" && args.selector
       ? args.selector
       : typeof args?.ref === "string" && args.ref
         ? (pageRef(active, args.ref)?.selector ?? "")
         : "";
-  if (sel === "") return; // 无目标 selector(如页面级按键):不拦
+
   let desc: SensitiveDesc | null = null;
-  try {
-    desc = (await active.evaluate(describeTarget, sel)) as SensitiveDesc | null;
-  } catch {
-    return; // 页面不可达/导航中:交给原工具报错,不因闸门误伤
+  if (sel !== "") {
+    try {
+      desc = (await active.evaluate(describeTarget, sel)) as SensitiveDesc | null;
+    } catch {
+      // 页面不可达/导航中: 交给原工具报错, 不因闸门误伤
+    }
   }
-  const hits = sensitiveHits(desc, patterns);
-  if (hits.length === 0) return;
-  const label = desc !== null && (desc.name || desc.text) ? `(${desc.role !== "" ? `${desc.role} ` : ""}"${desc.name || desc.text}")` : "";
+
+  let url = "";
+  try {
+    url = active.url();
+  } catch {
+    /* ignore */
+  }
+
+  const decision = evaluatePolicy(config, {
+    url,
+    tool,
+    selector: sel,
+    desc,
+  });
+
+  if (decision.level !== "auto") return;
+
+  const label =
+    desc !== null && (desc.name || desc.text)
+      ? `(${desc.role !== "" ? `${desc.role} ` : ""}"${desc.name || desc.text}")`
+      : "";
+
+  const reason = decision.reason
+    ? `${decision.reason} ${label}`.trim()
+    : `敏感操作审批: ${tool} 目标操作命中安全策略 ${label}`.trim();
+
   await confirmTool(config, {
-    reason: `confirmMode:auto 硬拦截:${tool} 目标元素命中敏感模式 [${hits.join(", ")}] ${label}`.trim(),
+    reason,
     tool,
     args,
+    ...(decision.timeoutMs !== undefined ? { timeoutMs: decision.timeoutMs } : {}),
   });
 }
