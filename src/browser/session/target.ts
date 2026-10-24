@@ -3,6 +3,7 @@ import type { Frame, Locator, Page } from "playwright-core";
 import { extractElementLabel, getActiveDialog } from "../primitives/index.js";
 import { pageRef } from "./cache.js";
 import { withTimeout } from "../tools/common.js";
+import { resolveSemanticTarget, semanticMissMessage } from "./semantic.js";
 import type { TargetResolution } from "../types.js";
 
 /**
@@ -185,8 +186,26 @@ export async function resolveTargetLocator(
     };
   }
 
+  // 0.5 意图语义定位 (what 参数):一句话描述目标,页内打分扫描 + ref 注册,
+  // 替代 snapshot → find → click 三轮往返。仅当 selector/ref/row 均缺省时启用。
+  const what = args.what;
+  if (typeof what === "string" && what.trim() !== "" && args.selector === undefined && args.ref === undefined && rowPattern === undefined) {
+    const res = await resolveSemanticTarget(page, what, {
+      scope: typeof args.scope === "string" && args.scope !== "" ? args.scope : undefined,
+    });
+    if (!("candidates" in res)) return res;
+    // 二次兜底:walker role 推断失灵的自定义组件,按常见 role + 弹性文本尝试
+    for (const role of ["button", "link", "tab", "menuitem", "option"]) {
+      const loc = page.getByRole(role as any, { name: buildFlexibleTextPattern(what) }).first();
+      if ((await withTimeout(loc.count(), 800, "语义 role 兜底").catch(() => 0)) > 0) {
+        return { locator: loc, container: page, isIFrame: false, matchedCount: 1, visibleCount: 1 };
+      }
+    }
+    throw new Error(semanticMissMessage(res));
+  }
+
   if (args.selector === undefined) {
-    throw new Error("需要 selector 或 ref 之一 (或指定 row 与 action 进行表格行级定界)");
+    throw new Error("需要 selector 或 ref 之一 (或指定 row 与 action 进行表格行级定界,或用 what 语义定位)");
   }
 
   let rawSelector = String(args.selector);

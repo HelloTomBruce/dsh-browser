@@ -15,14 +15,18 @@ export function getInteractionTools(
   return [
     definePlainTool({
       name: "browser_click",
-      description: "点击页面元素:selector(CSS)或 ref(来自 browser_snapshot mode:'aria')二选一。也可通过 row(如 'TASK-1002') 与 action(如 '编辑') 直接定位表格中某行操作按钮，无需拼接脆弱选择器。",
+      description: "点击页面元素:selector(CSS)、ref(来自 browser_snapshot mode:'aria')或 what(意图描述,如 '登录'/'提交订单',页内打分匹配并自动注册 ref)三选一。也可通过 row(如 'TASK-1002') 与 action(如 '编辑') 直接定位表格中某行操作按钮。what 零命中时报错并附最相近候选。",
       parameters: {
         type: "object",
         properties: {
           selector: { type: "string", description: "CSS 选择器。" },
           ref: { type: "string", description: "aria 快照的 ref(如 'e3');导航后失效。" },
+          what: { type: "string", description: "意图描述(元素名称/文本,如 '登录'):页内打分语义定位,免快照直达;零命中返回最相近候选。" },
+          scope: { type: "string", description: "配合 what 限定扫描范围的容器选择器。" },
           row: { type: "string", description: "表格行文本标识，如 'TASK-1002'，用于行级定向操作。" },
           action: { type: "string", description: "行内操作按钮文本，如 '编辑'、'删除'、'详情'。" },
+          force: { type: "boolean", description: "跳过可点击性检查强制点击(不触发拟人化轨迹)。" },
+          humanize: { type: "boolean", description: "使用拟人化贝塞尔轨迹点击。" },
           timeoutMs: { type: "integer" },
         },
         additionalProperties: false,
@@ -44,15 +48,19 @@ export function getInteractionTools(
     definePlainTool({
       name: "browser_type",
       description:
-        "向输入框输入文本:selector(CSS)或 ref 二选一。clear=true 时先清空再输入(推荐用于表单);submit=true 时输入后按回车。",
+        "向输入框输入文本:selector(CSS)、ref 或 what(意图描述,如 '用户名'/'搜索')定位目标。clear=true 时先清空再输入(推荐用于表单);submit=true 时输入后按回车;editor=true 时适配 Monaco/CodeMirror/富文本编辑器。",
       parameters: {
         type: "object",
         properties: {
           selector: { type: "string" },
           ref: { type: "string", description: "aria 快照的 ref(如 'e2')。" },
+          what: { type: "string", description: "意图描述(元素名称/label/placeholder,如 '用户名'):页内打分语义定位。" },
+          scope: { type: "string", description: "配合 what 限定扫描范围的容器选择器。" },
           text: { type: "string" },
           clear: { type: "boolean" },
           submit: { type: "boolean" },
+          editor: { type: "boolean", description: "按代码/富文本编辑器适配输入(Monaco/CodeMirror/contenteditable)。" },
+          humanize: { type: "boolean", description: "使用高斯间隔拟人化逐字输入。" },
           delayMs: { type: "integer" },
           timeoutMs: { type: "integer" },
         },
@@ -86,6 +94,7 @@ export function getInteractionTools(
           key: { type: "string", description: "按键名(Playwright 键盘键名)。" },
           selector: { type: "string" },
           ref: { type: "string", description: "aria 快照的 ref。" },
+          what: { type: "string", description: "意图描述:先聚焦该元素再按键(页内打分语义定位)。" },
           timeoutMs: { type: "integer" },
         },
         required: ["key"],
@@ -114,6 +123,7 @@ export function getInteractionTools(
         properties: {
           selector: { type: "string", description: "下拉触发框的 CSS 选择器(如 #rc_select_1)。" },
           ref: { type: "string", description: "aria 快照的 ref。" },
+          what: { type: "string", description: "意图描述(下拉的 label/名称,如 '所属部门'):页内打分语义定位触发框。" },
           option: { type: "string", description: "要选择的选项文本。" },
           exact: { type: "boolean", description: "精确匹配,默认 false(包含匹配)。" },
           clear: { type: "boolean", description: "是否在选择前先清空已有选中项(对于多选下拉，替换而非叠加旧选项)。" },

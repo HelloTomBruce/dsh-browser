@@ -28,6 +28,37 @@ export function pageRefsOf(page: Page): Map<string, RefEntry> {
   return refRegistry.get(page) ?? new Map<string, RefEntry>();
 }
 
+/**
+ * 为命中元素增量分配 ref:沿用既有注册表的编号继续(不与上次快照冲突),
+ * 合并写回;返回带 ref 的命中列表(上限 maxRefs,超出标 truncated)。
+ * 纯逻辑不依赖浏览器;findTool 与语义定位(semantic.ts)共用。
+ */
+export function assignRefs(
+  existing: Map<string, RefEntry>,
+  matches: { role: string; name: string; selector: string; ancestors?: string[] }[],
+  maxRefs: number,
+): { withRefs: { ref: string; role: string; name: string; selector: string; ancestors?: string[] }[]; merged: Map<string, RefEntry>; truncated: boolean } {
+  let next = 0;
+  for (const key of existing.keys()) {
+    const n = Number(key.replace(/^e/, ""));
+    if (Number.isFinite(n) && n > next) next = n;
+  }
+  const merged = new Map(existing);
+  const withRefs: { ref: string; role: string; name: string; selector: string; ancestors?: string[] }[] = [];
+  let truncated = false;
+  for (const m of matches) {
+    if (merged.size >= maxRefs) {
+      truncated = true;
+      break;
+    }
+    next += 1;
+    const ref = `e${next}`;
+    merged.set(ref, { role: m.role, name: m.name, selector: m.selector });
+    withRefs.push({ ref, ...m });
+  }
+  return { withRefs, merged, truncated };
+}
+
 
 // ---------------------------------------------------------------------------
 // 快照缓存(browser_snapshot 增量模式):per-page 记录最近一次全量内容与版本号,

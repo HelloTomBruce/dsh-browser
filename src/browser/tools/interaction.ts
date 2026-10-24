@@ -39,7 +39,7 @@ export async function clickTool(config: BrowserConfig, args: Record<string, any>
   const page = await getPage(config);
   const targetRes = await resolveTargetLocator(page, args);
   let target = targetRes.locator;
-  const label = String(args.ref ?? args.selector ?? "");
+  const label = String(args.ref ?? args.selector ?? args.what ?? "");
 
   // 1. 隐藏 input 点击目标提升 (Target Lifting)
   target = await liftTargetIfHiddenInput(target);
@@ -129,7 +129,7 @@ export async function clickTool(config: BrowserConfig, args: Record<string, any>
   ]);
 
   return {
-    clicked: String(args.ref ?? args.selector ?? (args.row ? `row: ${args.row}` : "target")),
+    clicked: String(args.ref ?? args.selector ?? args.what ?? (args.row ? `row: ${args.row}` : "target")),
     ...(await pageIdentity(page)),
   };
 }
@@ -224,7 +224,7 @@ export async function pressTool(config: BrowserConfig, args: Record<string, any>
     }
   }
 
-  if (args.selector !== undefined || args.ref !== undefined) {
+  if (args.selector !== undefined || args.ref !== undefined || (typeof args.what === "string" && args.what.trim() !== "")) {
     const target = await targetLocator(page, args);
     await target.press(key, {
       timeout: args.timeoutMs ?? config.timeoutMs,

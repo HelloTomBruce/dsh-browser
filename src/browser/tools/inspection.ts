@@ -9,11 +9,17 @@ import {
   snapshotCacheOf, setSnapshotCache, pushSnapshotVersion, snapshotVersionEntry,
   noteScreenshotDir, cleanupScreenshots, pageIdentity,
 } from "../session.js";
+import { scanInteractive } from "../session/semantic.js";
+import { assignRefs as assignRefsImpl } from "../session/cache.js";
 import { safeName as sanitizeName } from "../recordings.js";
 import { workspaceBaseDir } from "../../lib/tools.js";
 import { injectWalker } from "../walker.js";
 import { compressText, diffLines, topSuggestions, pngSize, DROPDOWN_OPTION_SELECTOR, withTimeout } from "./common.js";
 import { getActiveDialog } from "../primitives/index.js";
+
+// assignRefs 已下沉到 session/cache.ts(findTool 与语义定位共用);此处re-export
+// 保持既有导入路径(../src/browser/tools.js)兼容。
+export const assignRefs = assignRefsImpl;
 
 /**
  * 页内 ARIA 树构建(walker 单一来源:roleOf/nameOf/cssPath/isVisible 与
@@ -119,122 +125,9 @@ const buildAriaTree = injectWalker<{
 });
 
 /**
- * 页内语义查找:只收集匹配 query 的可交互元素(不构建全量树)。
- * role/name/cssPath/isVisible 与 buildAriaTree 同一来源(walker.ts 单一来源,
- * 构建期拼装注入),语义天然一致,不再需要手工同步副本。
+ * 页内语义扫描已收敛到 session/semantic.ts 的 scanInteractive(walker 单一
+ * 来源 + 打分排序),browser_find 与 what 语义定位共用同一匹配语义。
  */
-const findInteractive = injectWalker<{ query: string; exact: boolean; scope: string; limit: number }, {
-  matches: { role: string; name: string; selector: string; ancestors: string[] }[];
-  candidates: { role: string; name: string }[];
-  scanned: number;
-}>((payload, w) => {
-  const { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible } = w;
-
-  function resolveScopeRoot(scopeStr: string): Element | null {
-    if (!scopeStr) return document.body;
-    const wantsVisible = /:visible\b/.test(scopeStr);
-    const cleanSelector = scopeStr.replace(/:visible\b/g, "").trim() || "*";
-    try {
-      const list = Array.from(document.querySelectorAll(cleanSelector));
-      if (list.length === 0) return null;
-      const visibleList = list.filter((el) => isVisible(el));
-      if (wantsVisible) {
-        return visibleList.length > 0 ? visibleList[visibleList.length - 1] : null;
-      }
-      return visibleList.length > 0 ? visibleList[visibleList.length - 1] : list[0];
-    } catch {
-      return null;
-    }
-  }
-
-  /** 最近的结构化祖先(区域上下文,帮助区分多命中)。 */
-  function ancestorsOf(el: Element): string[] {
-    const out: string[] = [];
-    let cur: Element | null = el.parentElement;
-    while (cur && cur !== document.body && out.length < 3) {
-      const role = roleOf(cur);
-      if (STRUCTURAL.has(role)) {
-        const name = nameOf(cur, role);
-        out.push(name !== "" ? `${role} "${name.replace(/"/g, "'")}"` : role);
-      }
-      cur = cur.parentElement;
-    }
-    return out;
-  }
-
-  const q = payload.query.trim().toLowerCase();
-  const qStripped = q.replace(/\s+/g, "");
-  const matches: { role: string; name: string; selector: string; ancestors: string[] }[] = [];
-  const candidates: { role: string; name: string }[] = [];
-  let scanned = 0;
-  const root: Element | null = resolveScopeRoot(payload.scope);
-  if (root === null) return { matches: [], candidates, scanned: 0 };
-
-  const stack: Element[] = [root];
-  while (stack.length > 0) {
-    const el = stack.pop()!;
-    const role = roleOf(el);
-    if (INTERACTIVE.has(role)) {
-      if (!isVisible(el)) continue;
-      const name = nameOf(el, role);
-      const idOrTestid = el.id || el.getAttribute("data-testid") || "";
-      let hit = false;
-      if (name !== "") {
-        const n = name.toLowerCase();
-        const nStripped = n.replace(/\s+/g, "");
-        // 支持去空白归一化 (解决 antd "导 出" vs "导出", "确 定" vs "确定" 等 Two-word 按钮分词空格)
-        hit = payload.exact
-          ? n === q || (qStripped !== "" && nStripped === qStripped)
-          : n.includes(q) || (qStripped !== "" && nStripped.includes(qStripped));
-      }
-      if (!hit && idOrTestid !== "") {
-        const idLower = idOrTestid.toLowerCase();
-        hit = idLower === q || (qStripped !== "" && idLower.replace(/\s+/g, "") === qStripped);
-      }
-      scanned += 1;
-      if (name !== "" && candidates.length < 50) candidates.push({ role, name });
-      if (hit && matches.length < payload.limit) {
-        matches.push({ role, name, selector: cssPath(el), ancestors: ancestorsOf(el) });
-      }
-      continue; // 可交互元素不深入
-    }
-    for (const c of Array.from(el.children)) {
-      if (!SKIP_TAGS.has(c.tagName.toLowerCase())) stack.push(c);
-    }
-  }
-  return { matches, candidates, scanned };
-});
-
-/**
- * 为命中元素增量分配 ref:沿用既有注册表的编号继续(不与上次快照冲突),
- * 合并写回;返回带 ref 的命中列表(上限 maxRefs,超出标 truncated)。
- * 导出供测试(纯逻辑,不依赖浏览器)。
- */
-export function assignRefs(
-  existing: Map<string, RefEntry>,
-  matches: { role: string; name: string; selector: string; ancestors: string[] }[],
-  maxRefs: number,
-): { withRefs: { ref: string; role: string; name: string; selector: string; ancestors: string[] }[]; merged: Map<string, RefEntry>; truncated: boolean } {
-  let next = 0;
-  for (const key of existing.keys()) {
-    const n = Number(key.replace(/^e/, ""));
-    if (Number.isFinite(n) && n > next) next = n;
-  }
-  const merged = new Map(existing);
-  const withRefs: { ref: string; role: string; name: string; selector: string; ancestors: string[] }[] = [];
-  let truncated = false;
-  for (const m of matches) {
-    if (merged.size >= maxRefs) {
-      truncated = true;
-      break;
-    }
-    next += 1;
-    const ref = `e${next}`;
-    merged.set(ref, { role: m.role, name: m.name, selector: m.selector });
-    withRefs.push({ ref, ...m });
-  }
-  return { withRefs, merged, truncated };
-}
 
 /**
  * 语义元素定位:按名称(或 id/data-testid)在可交互元素中查找,只返回命中的
@@ -249,7 +142,7 @@ export async function findTool(config: BrowserConfig, args: Record<string, any>)
   }
   const page = await getPage(config);
   const maxRefs = Math.min(Math.max(Number(args.maxRefs ?? config.maxRefs ?? 200) || 200, 1), 500);
-  const data = await page.evaluate(findInteractive, {
+  const data = await page.evaluate(scanInteractive, {
     query,
     exact: args.exact === true,
     scope: typeof args.scope === "string" && args.scope ? args.scope : "",
@@ -257,7 +150,9 @@ export async function findTool(config: BrowserConfig, args: Record<string, any>)
   });
   const { withRefs, merged, truncated } = assignRefs(pageRefsOf(page), data.matches, maxRefs);
   setPageRefs(page, merged); // 合并(非整表替换):既有 ref 继续有效
-  const suggestions = withRefs.length === 0 ? topSuggestions(query, data.candidates) : [];
+  const suggestions = withRefs.length === 0
+    ? topSuggestions(query, data.candidates.map(({ role, name }) => ({ role, name })))
+    : [];
   return {
     found: withRefs.length,
     matches: withRefs.slice(0, 10).map(({ ref, role, name, ancestors }) => ({ ref, role, name, ancestors })),

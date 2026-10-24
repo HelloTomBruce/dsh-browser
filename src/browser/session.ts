@@ -10,6 +10,7 @@ export * from "./session/collaboration.js";
 export * from "./session/recorder.js";
 export * from "./session/screenshot.js";
 export * from "./session/target.js";
+export * from "./session/semantic.js";
 
 import { clearPageRefs } from "./session/cache.js";
 import { HUMAN_BINDING, handleHumanEvent, installHumanRecorder } from "./session/recorder.js";
