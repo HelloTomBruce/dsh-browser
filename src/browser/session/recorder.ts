@@ -181,10 +181,23 @@ export const installHumanRecorder = injectWalker<unknown, void>((_payload, w) =>
     }
   }
 
+  /** 组合事件路径的首个节点:shadow DOM 内的真实目标(document 层监听默认被 retarget 到宿主)。 */
+  function realTarget(e: Event): Element | null {
+    let raw: EventTarget | null = e.target;
+    try {
+      const path = typeof e.composedPath === "function" ? e.composedPath() : [];
+      if (path.length > 0 && path[0] instanceof Element) raw = path[0];
+    } catch {
+      /* closed shadow 或旧环境:回落 e.target */
+    }
+    return raw instanceof Element ? raw : null;
+  }
+
   document.addEventListener(
     "click",
     (e) => {
-      const target = e.target instanceof Element ? e.target.closest(INTERACTIVE) : null;
+      const el = realTarget(e);
+      const target = el !== null ? el.closest(INTERACTIVE) : null;
       if (target === null) return;
       send(payloadOf(target, "click"));
     },
@@ -194,7 +207,7 @@ export const installHumanRecorder = injectWalker<unknown, void>((_payload, w) =>
   document.addEventListener(
     "change",
     (e) => {
-      const t = e.target instanceof Element ? e.target : null;
+      const t = realTarget(e);
       if (t === null) return;
       if (t.tagName === "SELECT") {
         const opt = (t as HTMLSelectElement).selectedOptions[0];

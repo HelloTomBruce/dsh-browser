@@ -127,7 +127,10 @@ function __walkerCore() {
     return "";
   }
 
-  /** 稳定 CSS 路径:#id → [data-testid] → nth-of-type 链(≤6 层)。 */
+  /** 稳定 CSS 路径:#id → [data-testid] → nth-of-type 链(≤6 层)。
+   * 跨 open shadow root:上溯经 composedParent(host 链),生成扁平 `>` 链 ——
+   * Playwright 的 css 引擎对 open shadow root 是穿透的,扁平链可直接命中;
+   * closed shadow root 页内不可见,不进遍历也不进路径。 */
   function cssPath(el: Element): string {
     if (el.id) return `#${CSS.escape(el.id)}`;
     const testid = el.getAttribute("data-testid") ?? el.getAttribute("data-test-id");
@@ -136,7 +139,7 @@ function __walkerCore() {
     let cur: Element | null = el;
     while (cur && cur !== document.body && parts.length < 6) {
       const tag = cur.tagName.toLowerCase();
-      const parent: Element | null = cur.parentElement;
+      const parent: Element | null = composedParent(cur);
       if (!parent) {
         parts.unshift(tag);
         break;
@@ -147,6 +150,25 @@ function __walkerCore() {
       cur = parent;
     }
     return parts.join(" > ");
+  }
+
+  /** 组合树父节点:普通 parentElement,shadow root 顶层则取宿主元素(跨边界上溯)。 */
+  function composedParent(el: Element): Element | null {
+    const p = el.parentElement;
+    if (p !== null) return p;
+    const root = el.getRootNode();
+    if (root instanceof ShadowRoot) return root.host ?? null;
+    return null;
+  }
+
+  /** 组合树子节点:light children + open shadowRoot 的顶层 children(穿透遍历用)。 */
+  function deepChildren(el: Element): Element[] {
+    const out = Array.from(el.children);
+    const sr = el.shadowRoot;
+    if (sr !== null && sr !== undefined) {
+      for (const c of Array.from(sr.children)) out.push(c);
+    }
+    return out;
   }
 
   function isVisible(el: Element): boolean {
@@ -207,7 +229,7 @@ function __walkerCore() {
     };
   }
 
-  return { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible, isElementInViewport, describeElement };
+  return { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible, isElementInViewport, describeElement, composedParent, deepChildren };
 }
 
 /** walker 核心注入后暴露给 entry 的 API(类型层)。 */

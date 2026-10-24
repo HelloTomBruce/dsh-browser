@@ -40,7 +40,7 @@ const buildAriaTree = injectWalker<{
   scopeMissing: boolean;
   prunedCount: number;
 }>((payload, w) => {
-  const { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible, isElementInViewport } = w;
+  const { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible, isElementInViewport, deepChildren } = w;
   const lines: string[] = [];
   const refs: { ref: string; role: string; name: string; selector: string; rect?: { x: number; y: number; w: number; h: number }; scroll?: { x: number; y: number } }[] = [];
   let truncated = false;
@@ -86,7 +86,7 @@ const buildAriaTree = injectWalker<{
       );
       // 复合容器角色 (listbox, menu, tablist, tree, grid 等) 需要继续递归其子选项条目
       if (["listbox", "menu", "menubar", "tablist", "tree", "grid"].includes(role)) {
-        for (const c of Array.from(el.children)) {
+        for (const c of deepChildren(el)) {
           if (!SKIP_TAGS.has(c.tagName.toLowerCase())) walk(c, depth + 1);
         }
       }
@@ -102,13 +102,13 @@ const buildAriaTree = injectWalker<{
         el.getAttribute("aria-modal") === "true";
       const dialogFlag = isDialog ? " [modal: closeOnEsc]" : "";
       lines.push(`${"  ".repeat(depth)}- ${role}${name !== "" ? ` "${name.replace(/"/g, "'")}"` : ""}${level}${dialogFlag}`);
-      for (const c of Array.from(el.children)) {
+      for (const c of deepChildren(el)) {
         if (!SKIP_TAGS.has(c.tagName.toLowerCase())) walk(c, depth + 1);
       }
       return;
     }
     // 无语义容器:穿透
-    for (const c of Array.from(el.children)) {
+    for (const c of deepChildren(el)) {
       if (!SKIP_TAGS.has(c.tagName.toLowerCase())) walk(c, depth);
     }
   }
@@ -402,7 +402,7 @@ const injectSomOverlay = injectWalker<{ maxMarks: number; color: string }, Array
   rect?: { x: number; y: number; w: number; h: number };
   scroll?: { x: number; y: number };
 }>>((payload, w) => {
-  const { INTERACTIVE, roleOf, nameOf, cssPath, isVisible, isElementInViewport } = w;
+  const { INTERACTIVE, roleOf, nameOf, cssPath, isVisible, isElementInViewport, deepChildren } = w;
   const marks: Array<{ id: number; role: string; name: string; selector: string; rect?: { x: number; y: number; w: number; h: number }; scroll?: { x: number; y: number } }> = [];
   const snapScroll = { x: window.scrollX, y: window.scrollY };
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -416,7 +416,7 @@ const injectSomOverlay = injectWalker<{ maxMarks: number; color: string }, Array
       candidates.push(el);
       return;
     }
-    for (const c of Array.from(el.children)) {
+    for (const c of deepChildren(el)) {
       if (c.tagName !== "SCRIPT" && c.tagName !== "STYLE") collect(c);
     }
   }

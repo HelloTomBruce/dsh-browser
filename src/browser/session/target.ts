@@ -44,7 +44,7 @@ const coordinateProbe = injectWalker<
   while (el !== null && hops < 6) {
     const d = w.describeElement(el);
     if (w.INTERACTIVE.has(d.role)) return { selector: d.selector, role: d.role, name: d.name };
-    el = el.parentElement;
+    el = w.composedParent(el);
     hops += 1;
   }
   return null;

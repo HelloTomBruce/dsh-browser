@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Shadow DOM 穿透定位测试页</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 24px; background: #f6f8fa; color: #24292f; }
+    h2 { margin-top: 0; }
+    .tip { font-size: 13px; color: #57606a; background: #fff8c5; border: 1px solid #d4a72c; border-radius: 6px; padding: 8px 12px; display: inline-block; }
+    #status { margin-top: 12px; font-size: 14px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h2>Shadow DOM 穿透定位测试页</h2>
+  <div class="tip">本页包含一层与两层嵌套的 open shadow root 自定义元素,用于验证快照 / find / click / type 的组合树穿透能力。closed shadow root 页内不可见,不在穿透范围。</div>
+  <shadow-panel id="panel"></shadow-panel>
+  <div id="status">尚未点击</div>
+
+  <script>
+    // 第二层:shadow-inner 的 shadow root 内放一个「深层 Shadow 登录」按钮
+    class ShadowInner extends HTMLElement {
+      connectedCallback() {
+        const root = this.attachShadow({ mode: "open" });
+        root.innerHTML = `
+          <div class="inner">
+            <button type="button" id="deep-login" data-testid="deep-shadow-login">深层 Shadow 登录</button>
+          </div>`;
+        root.querySelector("#deep-login").addEventListener("click", () => {
+          document.getElementById("status").textContent = "深层 Shadow 登录 已点击";
+        });
+      }
+    }
+    customElements.define("shadow-inner", ShadowInner);
+
+    // 第一层:shadow-panel 的 shadow root 内放按钮 / 输入框 / 嵌套 shadow-inner
+    class ShadowPanel extends HTMLElement {
+      connectedCallback() {
+        const root = this.attachShadow({ mode: "open" });
+        root.innerHTML = `
+          <div class="panel">
+            <button type="button" id="shadow-submit" data-testid="shadow-submit">Shadow 提交</button>
+            <button type="button" id="shadow-delete">Shadow 删除</button>
+            <input type="text" id="shadow-input" placeholder="Shadow 用户名" aria-label="Shadow 用户名" />
+            <shadow-inner></shadow-inner>
+          </div>`;
+        root.querySelector("#shadow-submit").addEventListener("click", () => {
+          document.getElementById("status").textContent = "Shadow 提交 已点击";
+        });
+        root.querySelector("#shadow-delete").addEventListener("click", () => {
+          document.getElementById("status").textContent = "Shadow 删除 已点击";
+        });
+      }
+    }
+    customElements.define("shadow-panel", ShadowPanel);
+  </script>
+</body>
+</html>

@@ -54,7 +54,7 @@ export const scanInteractive = injectWalker<
   { query: string; exact: boolean; scope: string; limit: number; dialogSelector?: string },
   { matches: SemanticMatch[]; candidates: { role: string; name: string; selector: string }[]; scanned: number }
 >((payload, w) => {
-  const { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible } = w;
+  const { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible, deepChildren, composedParent } = w;
 
   function resolveScopeRoot(scopeStr: string): Element | null {
     if (!scopeStr) return document.body;
@@ -76,14 +76,14 @@ export const scanInteractive = injectWalker<
   /** 最近的结构化祖先(区域上下文,帮助区分多命中)。 */
   function ancestorsOf(el: Element): string[] {
     const out: string[] = [];
-    let cur: Element | null = el.parentElement;
+    let cur: Element | null = composedParent(el);
     while (cur && cur !== document.body && out.length < 3) {
       const role = roleOf(cur);
       if (STRUCTURAL.has(role)) {
         const name = nameOf(cur, role);
         out.push(name !== "" ? `${role} "${name.replace(/"/g, "'")}"` : role);
       }
-      cur = cur.parentElement;
+      cur = composedParent(cur);
     }
     return out;
   }
@@ -172,7 +172,7 @@ export const scanInteractive = injectWalker<
       }
       continue; // 可交互元素不深入
     }
-    for (const c of Array.from(el.children)) {
+    for (const c of deepChildren(el)) {
       if (!SKIP_TAGS.has(c.tagName.toLowerCase())) stack.push(c);
     }
   }

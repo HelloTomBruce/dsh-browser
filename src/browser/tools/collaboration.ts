@@ -260,7 +260,7 @@ const describePoint = injectWalker<
   while (el !== null && hops < 6) {
     const d = w.describeElement(el);
     if (w.INTERACTIVE.has(d.role)) return d;
-    el = el.parentElement;
+    el = w.composedParent(el);
     hops += 1;
   }
   // 没爬到可交互元素(点在空白/纯展示区域):按未命中处理
