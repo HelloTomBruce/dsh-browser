@@ -1,9 +1,10 @@
 // dsh-browser · 统一目标定位解析门面 (Target Resolution Pipeline)
 import type { Frame, Locator, Page } from "playwright-core";
 import { extractElementLabel, getActiveDialog } from "../primitives/index.js";
-import { pageRef } from "./cache.js";
-import { withTimeout } from "../tools/common.js";
+import { pageMark, pageRef } from "./cache.js";
+import { withTimeout, lcsScore } from "../tools/common.js";
 import { resolveSemanticTarget, semanticMissMessage } from "./semantic.js";
+import { injectWalker } from "../walker.js";
 import type { TargetResolution } from "../types.js";
 
 /**
@@ -25,6 +26,39 @@ export function buildFlexibleTextPattern(text: string): RegExp {
     return new RegExp(trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
   }
   return new RegExp(tokens.join("[\\s\\u00a0]*"), "i");
+}
+
+/**
+ * 坐标兜底页内探测:按快照时的视口坐标(当前 scroll 修正)elementFromPoint,
+ * 从命中点向上爬到最近的可交互元素并返回其统一描述(walker 单一来源)。
+ */
+const coordinateProbe = injectWalker<
+  { x: number; y: number; sx: number; sy: number },
+  { selector: string; role: string; name: string } | null
+>((payload, w) => {
+  const cx = payload.x - (window.scrollX - payload.sx);
+  const cy = payload.y - (window.scrollY - payload.sy);
+  if (cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) return null;
+  let el: Element | null = document.elementFromPoint(cx, cy);
+  let hops = 0;
+  while (el !== null && hops < 6) {
+    const d = w.describeElement(el);
+    if (w.INTERACTIVE.has(d.role)) return { selector: d.selector, role: d.role, name: d.name };
+    el = el.parentElement;
+    hops += 1;
+  }
+  return null;
+});
+
+/** ref 坐标兜底的名称相似判定:去空白互相包含,或 LCS 占比 ≥ 0.6。 */
+function nameSimilar(a: string, b: string): boolean {
+  if (a === "" || b === "") return true;
+  const clean = (s: string) => s.replace(/[\s\u00a0]+/g, "").toLowerCase();
+  const ca = clean(a);
+  const cb = clean(b);
+  if (ca.includes(cb) || cb.includes(ca)) return true;
+  const maxLen = Math.max(a.length, b.length);
+  return maxLen > 0 && lcsScore(a, b) / maxLen >= 0.6;
 }
 
 /**
@@ -157,9 +191,58 @@ export async function resolveTargetLocator(
       return { locator: byRole, container, entry, isIFrame };
     }
 
+    // 降级 3: 坐标兜底 — 路径与 role 降级全部失灵时,按快照时的视口包围盒
+    // (当前 scroll 修正)elementFromPoint 重新命中,walker describeElement 校验
+    // role/name 相似防误点;校验不过维持「ref 已失效」。
+    if (entry.rect !== undefined && entry.scroll !== undefined) {
+      try {
+        const hit = await withTimeout(
+          container.evaluate(coordinateProbe, {
+            x: entry.rect.x,
+            y: entry.rect.y,
+            sx: entry.scroll.x,
+            sy: entry.scroll.y,
+          }),
+          2_000,
+          "ref 坐标兜底",
+        ).catch(() => null);
+        if (hit !== null && hit.role === entry.role && nameSimilar(entry.name, hit.name)) {
+          const loc = container.locator(hit.selector).first();
+          if ((await withTimeout(loc.count(), 1_000, "坐标兜底定位").catch(() => 0)) > 0) {
+            return { locator: loc, container, entry, isIFrame };
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
     throw new Error(
       `ref ${ref} 已失效(元素不存在或内容已变化);请重新 browser_snapshot { mode: "aria" }`,
     );
+  }
+
+  // 0.2 SoM 标徽定位 (mark 参数):browser_screenshot { som: true } 返回的标徽
+  // 编号直接点击 —— 多模态看图定位的落点;与 ref 同生命周期(导航即失效)。
+  if (args.mark !== undefined && args.selector === undefined && args.ref === undefined) {
+    const id = Number(args.mark);
+    const entry = pageMark(page, id);
+    if (entry === undefined) {
+      throw new Error(
+        `未知 mark: ${args.mark}(来自 browser_screenshot { som: true } 的标徽;导航后失效,请重新截图)`,
+      );
+    }
+    const byPath = page.locator(entry.selector).first();
+    if ((await withTimeout(byPath.count(), 3_000, "解析 mark 路径").catch(() => 0)) > 0) {
+      return { locator: byPath, container: page, isIFrame: false, matchedCount: 1, visibleCount: 1 };
+    }
+    if (entry.name !== "") {
+      const byRole = page.getByRole(entry.role as any, { name: buildFlexibleTextPattern(entry.name) }).first();
+      if ((await withTimeout(byRole.count(), 1_500, "mark role 降级").catch(() => 0)) > 0) {
+        return { locator: byRole, container: page, isIFrame: false, matchedCount: 1, visibleCount: 1 };
+      }
+    }
+    throw new Error(`mark ${id} 已失效(元素不存在或内容已变化);请重新 browser_screenshot { som: true }`);
   }
 
   // 0. 特性: 表格行级定向解析 (Row Scoping Pipeline)
@@ -187,9 +270,9 @@ export async function resolveTargetLocator(
   }
 
   // 0.5 意图语义定位 (what 参数):一句话描述目标,页内打分扫描 + ref 注册,
-  // 替代 snapshot → find → click 三轮往返。仅当 selector/ref/row 均缺省时启用。
+  // 替代 snapshot → find → click 三轮往返。仅当 selector/ref/mark/row 均缺省时启用。
   const what = args.what;
-  if (typeof what === "string" && what.trim() !== "" && args.selector === undefined && args.ref === undefined && rowPattern === undefined) {
+  if (typeof what === "string" && what.trim() !== "" && args.selector === undefined && args.ref === undefined && args.mark === undefined && rowPattern === undefined) {
     const res = await resolveSemanticTarget(page, what, {
       scope: typeof args.scope === "string" && args.scope !== "" ? args.scope : undefined,
     });
@@ -201,7 +284,10 @@ export async function resolveTargetLocator(
         return { locator: loc, container: page, isIFrame: false, matchedCount: 1, visibleCount: 1 };
       }
     }
-    throw new Error(semanticMissMessage(res));
+    // miss 数据挂在错误对象上,供 clickTool 走 SoM 截图兜底(多模态看图定位)
+    const err = new Error(semanticMissMessage(res));
+    (err as any).semanticMiss = res;
+    throw err;
   }
 
   if (args.selector === undefined) {

@@ -1,6 +1,6 @@
-// dsh-browser · 会话管理 — 快照缓存与 Ref 映射
+// dsh-browser · 会话管理 — 快照缓存与 Ref/Mark 映射
 import type { Page } from "playwright-core";
-import type { RefEntry } from "../types.js";
+import type { MarkEntry, RefEntry } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // ARIA 快照 ref 注册表:page → (ref → 定位信息)。页面导航即失效(防漂移)。
@@ -57,6 +57,28 @@ export function assignRefs(
     withRefs.push({ ref, ...m });
   }
   return { withRefs, merged, truncated };
+}
+
+// ---------------------------------------------------------------------------
+// SoM 标徽注册表(browser_screenshot { som: true } → click { mark: N }):
+// page → (markId → 定位信息)。页面导航即失效(与 ref 注册表同生命周期)。
+// ---------------------------------------------------------------------------
+
+const markRegistry = new WeakMap<Page, Map<number, MarkEntry>>();
+
+/** 记录一次 SoM 截图的标徽表(整表替换)。 */
+export function setPageMarks(page: Page, marks: Map<number, MarkEntry>): void {
+  markRegistry.set(page, marks);
+}
+
+/** 查询某个标徽的定位信息;未注册返回 undefined。 */
+export function pageMark(page: Page, id: number): MarkEntry | undefined {
+  return markRegistry.get(page)?.get(id);
+}
+
+/** 清空页面的标徽表(导航时调用)。 */
+export function clearPageMarks(page: Page): void {
+  markRegistry.delete(page);
 }
 
 

@@ -12,6 +12,7 @@ import {
 } from "../session.js";
 import { workspaceBaseDir } from "../../lib/tools.js";
 import { withTimeout, unwrapDoubleEncodedScript, workspaceFilePath } from "./common.js";
+import { somFallbackShot } from "./inspection.js";
 import {
   isElementDisabled,
   waitForDOMQuiescence,
@@ -35,11 +36,38 @@ export function isBotSensitiveUrl(url: string): boolean {
   return /login|signin|auth|captcha|challenge|turnstile|security|waf/i.test(url);
 }
 
-export async function clickTool(config: BrowserConfig, args: Record<string, any>) {
+/**
+ * 语义定位(what)零命中时的 SoM 兜底:截一张带标徽的视口图并附到错误消息,
+ * 多模态模型可看图后 browser_click { mark: N } 一次往返完成定位。
+ * config.somFallback === false 关闭;截图失败静默(不放大错误)。
+ */
+async function enrichSemanticMiss(
+  e: unknown,
+  config: BrowserConfig,
+  exec?: ToolRunContext,
+): Promise<unknown> {
+  const miss = (e as { semanticMiss?: unknown })?.semanticMiss;
+  if (miss === undefined || config.somFallback === false) return e;
+  const shot = await somFallbackShot(config, exec);
+  if (shot === null) return e;
+  const err = new Error(
+    `${e instanceof Error ? e.message : String(e)};已附 SoM 标徽截图(多模态看图后可用 browser_click { mark: N } 精准点击): ${shot.screenshot} — 标徽: ${shot.marks.map((m) => `${m.id}=${m.role} "${m.name}"`).slice(0, 20).join("; ") || "(无标徽)"}`,
+  );
+  (err as any).semanticMiss = miss;
+  (err as any).vlm = shot;
+  return err;
+}
+
+export async function clickTool(config: BrowserConfig, args: Record<string, any>, exec?: ToolRunContext) {
   const page = await getPage(config);
-  const targetRes = await resolveTargetLocator(page, args);
+  let targetRes;
+  try {
+    targetRes = await resolveTargetLocator(page, args);
+  } catch (e) {
+    throw await enrichSemanticMiss(e, config, exec);
+  }
   let target = targetRes.locator;
-  const label = String(args.ref ?? args.selector ?? args.what ?? "");
+  const label = String(args.ref ?? args.selector ?? args.mark ?? args.what ?? "");
 
   // 1. 隐藏 input 点击目标提升 (Target Lifting)
   target = await liftTargetIfHiddenInput(target);
@@ -129,7 +157,7 @@ export async function clickTool(config: BrowserConfig, args: Record<string, any>
   ]);
 
   return {
-    clicked: String(args.ref ?? args.selector ?? args.what ?? (args.row ? `row: ${args.row}` : "target")),
+    clicked: String(args.ref ?? args.selector ?? args.mark ?? args.what ?? (args.row ? `row: ${args.row}` : "target")),
     ...(await pageIdentity(page)),
   };
 }

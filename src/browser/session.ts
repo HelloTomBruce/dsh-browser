@@ -12,7 +12,7 @@ export * from "./session/screenshot.js";
 export * from "./session/target.js";
 export * from "./session/semantic.js";
 
-import { clearPageRefs } from "./session/cache.js";
+import { clearPageRefs, clearPageMarks } from "./session/cache.js";
 import { HUMAN_BINDING, handleHumanEvent, installHumanRecorder } from "./session/recorder.js";
 import { sessionTracer } from "./session/tracer.js";
 import { screencastManager } from "./session/screencast.js";
@@ -187,8 +187,9 @@ export function attachPage(page: Page, config: BrowserConfig): void {
   const profile = currentProfile;
   page.on("framenavigated", (frame) => {
     if (frame !== page.mainFrame()) return;
-    // 导航后旧 ref 全部失效(元素可能已不存在),防 ref 漂移误点。
+    // 导航后旧 ref/SoM 标徽全部失效(元素可能已不存在),防漂移误点。
     clearPageRefs(page);
+    clearPageMarks(page);
     const url = frame.url();
     if (!url || url === "about:blank") return;
     recordNav(profile, url);

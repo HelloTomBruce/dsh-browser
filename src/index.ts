@@ -59,6 +59,7 @@ const SCHEMA: ConfigSchema = {
   humanize: { type: "any", optional: true },
   humanizeSpeed: { type: "string", enum: ["slow", "normal", "fast"], optional: true },
   confirmInReplay: { type: "boolean" },
+  somFallback: { type: "boolean" },
   toolset: { type: "string", enum: ["core", "all"] },
 };
 
@@ -89,6 +90,7 @@ const DEFAULT_CONFIG = {
   sensitivePatterns: ["提交", "删除", "支付"], // auto 模式敏感文本模式(子串匹配,命中任一即拦)
   sensitiveTools: ["browser_click"], // auto 模式参与判定的工具(默认只拦 click)
   confirmInReplay: true, // replay/batch 是否同样走 auto 审批闸
+  somFallback: true, // what 语义定位零命中时自动附 SoM 标徽截图(多模态看图后 click { mark: N })
   toolset: "all", // all: 全部工具(默认);core: 只注册高频核心集,低 systemPrompt 常驻 token
 };
 

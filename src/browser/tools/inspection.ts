@@ -7,7 +7,7 @@ import type { BrowserConfig, RefEntry } from "../types.js";
 import {
   getPage, activePage, setPageRefs, pageRefsOf,
   snapshotCacheOf, setSnapshotCache, pushSnapshotVersion, snapshotVersionEntry,
-  noteScreenshotDir, cleanupScreenshots, pageIdentity,
+  noteScreenshotDir, cleanupScreenshots, pageIdentity, setPageMarks,
 } from "../session.js";
 import { scanInteractive } from "../session/semantic.js";
 import { assignRefs as assignRefsImpl } from "../session/cache.js";
@@ -35,17 +35,19 @@ const buildAriaTree = injectWalker<{
   viewportPadding?: number;
 }, {
   tree: string;
-  refs: { ref: string; role: string; name: string; selector: string }[];
+  refs: { ref: string; role: string; name: string; selector: string; rect?: { x: number; y: number; w: number; h: number }; scroll?: { x: number; y: number } }[];
   truncated: boolean;
   scopeMissing: boolean;
   prunedCount: number;
 }>((payload, w) => {
   const { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible, isElementInViewport } = w;
   const lines: string[] = [];
-  const refs: { ref: string; role: string; name: string; selector: string }[] = [];
+  const refs: { ref: string; role: string; name: string; selector: string; rect?: { x: number; y: number; w: number; h: number }; scroll?: { x: number; y: number } }[] = [];
   let truncated = false;
   let prunedCount = 0;
   const padding = payload.viewportPadding ?? 0;
+  // 视口内元素的包围盒与滚动偏移(坐标兜底数据源;视口外元素不记录,控制内存)
+  const snapScroll = { x: window.scrollX, y: window.scrollY };
 
   function walk(el: Element, depth: number): void {
     if (truncated) return;
@@ -64,7 +66,18 @@ const buildAriaTree = injectWalker<{
       if (!isVisible(el)) return;
       const name = nameOf(el, role);
       const ref = refs.length < payload.maxRefs ? `e${refs.length + 1}` : "";
-      if (ref !== "") refs.push({ ref, role, name, selector: cssPath(el) });
+      if (ref !== "") {
+        const rect = el.getBoundingClientRect();
+        refs.push({
+          ref,
+          role,
+          name,
+          selector: cssPath(el),
+          ...(isElementInViewport(el, 0)
+            ? { rect: { x: Math.round(rect.left), y: Math.round(rect.top), w: Math.round(rect.width), h: Math.round(rect.height) }, scroll: snapScroll }
+            : {}),
+        });
+      }
       const expanded = el.getAttribute("aria-expanded");
       const disabled =
         (el as HTMLButtonElement).disabled === true || el.getAttribute("aria-disabled") === "true";
@@ -227,7 +240,7 @@ export async function snapshotTool(config: BrowserConfig, args: Record<string, a
       throw new Error(`scope 未命中: 页面中没有匹配 "${scope}" 的元素${hint}`);
     }
     const map = new Map<string, RefEntry>(
-      data.refs.map((r) => [r.ref, { role: r.role, name: r.name, selector: r.selector, frameIndex: 0, frameUrl: page.url() }]),
+      data.refs.map((r) => [r.ref, { role: r.role, name: r.name, selector: r.selector, ...(r.rect !== undefined ? { rect: r.rect } : {}), ...(r.scroll !== undefined ? { scroll: r.scroll } : {}), frameIndex: 0, frameUrl: page.url() }]),
     );
     let finalTree = data.tree;
     let prunedTotal = data.prunedCount;
@@ -285,6 +298,8 @@ export async function snapshotTool(config: BrowserConfig, args: Record<string, a
                 role: r.role,
                 name: r.name,
                 selector: r.selector,
+                ...(r.rect !== undefined ? { rect: r.rect } : {}),
+                ...(r.scroll !== undefined ? { scroll: r.scroll } : {}),
                 frameIndex: fIdx,
                 frameUrl: sub.url(),
               });
@@ -383,9 +398,13 @@ const injectSomOverlay = injectWalker<{ maxMarks: number; color: string }, Array
   id: number;
   role: string;
   name: string;
+  selector: string;
+  rect?: { x: number; y: number; w: number; h: number };
+  scroll?: { x: number; y: number };
 }>>((payload, w) => {
-  const { INTERACTIVE, roleOf, nameOf, isVisible, isElementInViewport } = w;
-  const marks: Array<{ id: number; role: string; name: string }> = [];
+  const { INTERACTIVE, roleOf, nameOf, cssPath, isVisible, isElementInViewport } = w;
+  const marks: Array<{ id: number; role: string; name: string; selector: string; rect?: { x: number; y: number; w: number; h: number }; scroll?: { x: number; y: number } }> = [];
+  const snapScroll = { x: window.scrollX, y: window.scrollY };
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.id = "__dsh_som_overlay__";
   svg.setAttribute("style", "position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;");
@@ -442,7 +461,14 @@ const injectSomOverlay = injectWalker<{ maxMarks: number; color: string }, Array
     g.appendChild(textEl);
     svg.appendChild(g);
 
-    marks.push({ id: count, role, name });
+    marks.push({
+      id: count,
+      role,
+      name,
+      selector: cssPath(el),
+      rect: { x: Math.round(rect.left), y: Math.round(rect.top), w: Math.round(rect.width), h: Math.round(rect.height) },
+      scroll: snapScroll,
+    });
   }
 
   document.documentElement.appendChild(svg);
@@ -480,13 +506,23 @@ export async function screenshotTool(config: BrowserConfig, args: Record<string,
   const fileName = safeName.endsWith(".png") ? safeName : `${safeName}.png`;
   const filePath = join(dir, fileName);
 
-  let somMarks: Array<{ id: number; role: string; name: string }> | undefined = undefined;
+  let somMarks: Array<{ id: number; role: string; name: string; selector?: string; rect?: unknown; scroll?: unknown }> | undefined = undefined;
   if (args.som === true) {
     try {
       somMarks = await page.evaluate(injectSomOverlay, {
         maxMarks: Number(args.maxMarks ?? 50) || 50,
         color: String(args.somColor ?? "red"),
       });
+      // 标徽注册(click { mark: N } 消费;含 selector/rect 供定位与坐标兜底),
+      // 页面导航即失效(与 ref 注册表同生命周期)。
+      setPageMarks(
+        page,
+        new Map(
+          (somMarks ?? [])
+            .filter((m) => typeof m.selector === "string" && m.selector !== "")
+            .map((m) => [m.id, { role: m.role, name: m.name, selector: m.selector as string, ...(m.rect ? { rect: m.rect as any } : {}), ...(m.scroll ? { scroll: m.scroll as any } : {}) }]),
+        ),
+      );
     } catch {
       /* ignore */
     }
@@ -514,8 +550,28 @@ export async function screenshotTool(config: BrowserConfig, args: Record<string,
     bytes: buffer.length,
     width: viewport.width,
     height: viewport.height,
-    ...(somMarks ? { som: true, somMarks } : {}),
+    ...(somMarks ? { som: true, somMarks: somMarks.map(({ id, role, name }) => ({ id, role, name })) } : {}),
   };
+}
+
+/**
+ * 语义定位零命中时的 SoM 兜底截图(clickTool 失败路径调用,somFallback 配置
+ * 控制):截一张带标徽的视口图,供多模态模型看图后 browser_click { mark: N }
+ * 一次往返完成定位。无活动页面或截图失败返回 null(不放大错误)。
+ */
+export async function somFallbackShot(
+  config: BrowserConfig,
+  exec?: ToolRunContext,
+): Promise<{ screenshot: string; marks: Array<{ id: number; role: string; name: string }> } | null> {
+  try {
+    const page = activePage();
+    if (page === null) return null;
+    const res: any = await screenshotTool(config, { som: true, name: `som-miss-${Date.now()}` }, exec);
+    if (typeof res?.path !== "string") return null;
+    return { screenshot: res.path, marks: Array.isArray(res.somMarks) ? res.somMarks : [] };
+  } catch {
+    return null;
+  }
 }
 
 export async function elementsTool(config: BrowserConfig, args: Record<string, any>) {

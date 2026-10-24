@@ -15,7 +15,7 @@ export function getInteractionTools(
   return [
     definePlainTool({
       name: "browser_click",
-      description: "点击页面元素:selector(CSS)、ref(来自 browser_snapshot mode:'aria')或 what(意图描述,如 '登录'/'提交订单',页内打分匹配并自动注册 ref)三选一。也可通过 row(如 'TASK-1002') 与 action(如 '编辑') 直接定位表格中某行操作按钮。what 零命中时报错并附最相近候选。",
+      description: "点击页面元素:selector(CSS)、ref(来自 browser_snapshot mode:'aria')、what(意图描述,如 '登录'/'提交订单',页内打分匹配并自动注册 ref)或 mark(SoM 标徽编号,看图定位)四选一。也可通过 row(如 'TASK-1002') 与 action(如 '编辑') 直接定位表格中某行操作按钮。what 零命中时报错并附最相近候选与 SoM 标徽截图。",
       parameters: {
         type: "object",
         properties: {
@@ -23,6 +23,7 @@ export function getInteractionTools(
           ref: { type: "string", description: "aria 快照的 ref(如 'e3');导航后失效。" },
           what: { type: "string", description: "意图描述(元素名称/文本,如 '登录'):页内打分语义定位,免快照直达;零命中返回最相近候选。" },
           scope: { type: "string", description: "配合 what 限定扫描范围的容器选择器。" },
+          mark: { type: "integer", description: "SoM 标徽编号(browser_screenshot { som: true } 返回 somMarks 的 id);多模态看图定位的落点,导航后失效。" },
           row: { type: "string", description: "表格行文本标识，如 'TASK-1002'，用于行级定向操作。" },
           action: { type: "string", description: "行内操作按钮文本，如 '编辑'、'删除'、'详情'。" },
           force: { type: "boolean", description: "跳过可点击性检查强制点击(不触发拟人化轨迹)。" },
@@ -43,7 +44,7 @@ export function getInteractionTools(
       },
       render: (_args, value) => `Clicked ${value.clicked}\nNow at: ${value.url}`,
       timeoutMs: timeout(),
-      execute: (args) => clickTool(config, args),
+      execute: (args, exec) => clickTool(config, args, exec),
     }),
     definePlainTool({
       name: "browser_type",

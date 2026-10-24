@@ -69,6 +69,11 @@ export interface BrowserConfig {
    */
   confirmInReplay?: boolean;
   /**
+   * what 语义定位零命中时是否自动附 SoM 标徽截图(默认 true):多模态模型
+   * 可看图后 browser_click { mark: N } 一次往返完成定位。仅失败路径触发。
+   */
+  somFallback?: boolean;
+  /**
    * 工具集:all(默认,全部工具)| core(只注册高频核心集,低频的
    * 录制/回放/报告/抽取/profile 等不注册,降 systemPrompt 常驻 token)。
    */
@@ -121,6 +126,20 @@ export interface RefEntry {
   frameIndex?: number;
   /** 元素所在 Frame 的当前 URL(用于导航防漂移二次校验)。 */
   frameUrl?: string;
+  /** 快照时的视口内包围盒(仅视口内元素记录);ref 路径与 role 降级全部失灵时的坐标兜底。 */
+  rect?: { x: number; y: number; w: number; h: number };
+  /** 快照时的滚动偏移;坐标兜底按当前 scroll 修正视口位置。 */
+  scroll?: { x: number; y: number };
+}
+
+/** SoM 标徽(browser_screenshot { som: true })的注册项(id → 定位信息)。 */
+export interface MarkEntry {
+  role: string;
+  name: string;
+  selector: string;
+  /** 标徽快照时的视口内包围盒与滚动偏移(坐标兜底语义同 RefEntry)。 */
+  rect?: { x: number; y: number; w: number; h: number };
+  scroll?: { x: number; y: number };
 }
 
 /** 统一目标定位解析结果(无论在主 Frame 还是子 Frame 均可统一操作)。 */
