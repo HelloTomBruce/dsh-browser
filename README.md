@@ -4,8 +4,8 @@ DSH 插件:共享 Playwright 浏览器自动化 + 原生界面实时画面面板
 
 | 模块 | 做什么 |
 | --- | --- |
-| 🧭 **浏览器自动化** | 共享 Playwright 浏览器:多标签、多 profile、隔离 context、下载/上传、Cookie、跨 Frame/IFrame 穿透定位、视口感知动态快照(`viewportOnly`)、多模态 SoM 视口标徽(`som: true`)、批量表单智能填充(`browser_form_fill`)、增量快照(历史版本环形缓存,窗口内任意 since 可 diff)、抽取字段自动建议(action:suggest),37 个 `browser_*` 工具 |
-| 🖥️ **实时画面** | 注入 DSH 界面右下角悬浮面板:浏览器状态 + 实时缩略图,点开大屏模态框(2 秒轮询画面 + 访问历史);**双向协作**——agent 等待人工操作/敏感审批时显示交互横幅、执行点击/输入前目标元素琥珀色高亮预告(confirmMode:auto 时敏感动作由宿主层强制拦截弹审批,agent 无法绕过),「最近回归」行与报告模态可一键重跑(agent 忙碌自动置灰) |
+| 🧭 **浏览器自动化** | 共享 Playwright 浏览器:多标签、多 profile、隔离 context、下载/上传、Cookie、what 意图语义定位(`browser_click { what: "登录" }` 一次调用替代快照→查找→点击三轮,零命中返回相近候选 + SoM 看图兜底)、SoM 标徽点击(`mark: N`)、open Shadow DOM 组合树穿透、SPA 路由后 ref 软失效重锚定、点击效果验证(`effect: true`,点了没动静自动换候选)、跨 Frame/IFrame 穿透定位、视口感知动态快照(`viewportOnly`)、多模态 SoM 视口标徽(`som: true`)、批量表单智能填充(`browser_form_fill`)、增量快照(历史版本环形缓存)、抽取字段自动建议(action:suggest),38 个 `browser_*` 工具 |
+| 🖥️ **实时画面** | 注入 DSH 界面右下角悬浮面板:浏览器状态 + 实时缩略图,点开大屏模态框(2 秒轮询画面 + 访问历史);**双向协作**——agent 等待人工操作/敏感审批时显示交互横幅、执行点击/输入前目标元素琥珀色高亮预告(confirmMode:auto 时敏感动作由宿主层强制拦截弹审批,agent 无法绕过),**面板点选教学**(browser_pick_element:疑难元素用户在大图上点一下,直接拿到稳定 selector+指纹+ref),「最近回归」行与报告模态可一键重跑(agent 忙碌自动置灰) |
 | ✅ **回归测试闭环** | 录制回放 + 选择器自愈 + 参数化/数据驱动 + 失败自动重试(`retryFailed`)+ 视觉回归 + 运行历史/报告导出 + **一键导出原生 Playwright 规范代码(`action: "export"`)** + 面板一键重跑(`/runs/rerun`,agent 忙碌置灰) |
 
 设计原则:能做的一次性操作交给 agent 用 bash 完成,插件只做 bash 做不到的常驻浏览器自动化。唯一第三方运行时依赖是 `playwright-core`(复用系统已装的 Edge/Chrome,无需下载 Chromium),不依赖任何 `@deepseek-ai` 运行时包。
@@ -50,10 +50,12 @@ dsh plugin --profile web add dsh-browser-view
         sensitivePatterns: [提交, 删除, 支付]  # auto 模式敏感文本模式(子串匹配 role/name/text/id/testid/tag)
         sensitiveTools: [browser_click]        # auto 模式参与判定的工具(默认只拦 click;type 误报率高,需拦时显式加入)
         confirmInReplay: true     # replay/batch 是否同样走 auto 审批闸(false = 回放不弹审批,风险自担)
-        toolset: all              # all(默认全量 36 个)| core(高频核心集 24 个,降 systemPrompt 常驻 token)
+        somFallback: true          # what 语义定位零命中时自动附 SoM 标徽截图(多模态看图后 click { mark: N })
+        refReanchor: true          # SPA 路由后 ref 软失效重锚定(false = 导航即清空的旧行为)
+        toolset: all              # all(默认全量 38 个)| core(高频核心集 25 个,降 systemPrompt 常驻 token)
 ```
 
-**工具集裁剪(toolset)**:默认 `all` 注册全部工具。日常浏览/操作/人机协作为主的会话可设 `toolset: core`——只注册 24 个高频核心工具(打开/快照/查找/点击/输入/等待/断言/网络/标签/下载上传/登录等待/人工接管/审批/诊断),`browser_record / replay / report / extract / form / profile / context / cookies` 等低频工具不注册、不占 systemPrompt 常驻 token(低频工具的录制管理界面不受影响,已有录制仍可回放,只是 agent 会话内无这些工具)。需要做回归测试或数据抓取时把配置改回 `all` 并重启 DSH 即可。
+**工具集裁剪(toolset)**:默认 `all` 注册全部工具。日常浏览/操作/人机协作为主的会话可设 `toolset: core`——只注册 25 个高频核心工具(打开/快照/查找/点击/输入/等待/断言/网络/标签/下载上传/登录等待/人工接管/审批/点选教学/诊断),`browser_record / replay / report / extract / form / profile / context / cookies` 等低频工具不注册、不占 systemPrompt 常驻 token(低频工具的录制管理界面不受影响,已有录制仍可回放,只是 agent 会话内无这些工具)。需要做回归测试或数据抓取时把配置改回 `all` 并重启 DSH 即可。
 
 ## 浏览器工具
 
@@ -64,8 +66,8 @@ dsh plugin --profile web add dsh-browser-view
 | `browser_snapshot` | 页面快照:`mode: "text"`(默认)返回压缩后的文本/链接/输入框;`mode: "aria"` 返回可访问性树,可交互元素带 `[ref=eN]` 短引用;`scope`(CSS 选择器)限定提取区域(text/aria 都生效);`since`(上次返回的 contentVersion)增量重读——未变返回 `unchanged`,变了只返回变化行(`diff` + `changedFrom`/`removed`),翻页后重读 token 降一个量级 |
 | `browser_find` | 语义元素定位:按名称/id/data-testid 查找可交互元素,只返回命中 ref + ancestors 区域链(大页面定位单目标比全量 aria 快照省 95%+ token);`exact` 精确匹配、`scope` 限定容器;多命中全返回,零命中附相近候选 |
 | `browser_elements` | 可交互元素结构化清单(input/button/select/链接 + 关联 label + 现成 CSS 选择器;有展开下拉时附可见选项) |
-| `browser_click` / `browser_type` / `browser_press` | 点击 / 输入(可清空、可回车提交)/ 按键;`selector`(CSS)与 `ref`(aria 快照)二选一;自动识别并穿透跨域子 Frame |
-| `browser_select` | 下拉选择原语:原生 `<select>` 与 antd / element-plus / ARIA listbox 通用,selector/ref + option 文本一步完成;找不到选项时报错并列出可见选项 |
+| `browser_click` / `browser_type` / `browser_press` | 点击 / 输入(可清空、可回车提交)/ 按键;`selector`(CSS)、`ref`(aria 快照)、`what`(意图语义定位,页内打分匹配并自动注册 ref,零命中返回相近候选)、`mark`(SoM 标徽编号)四选一;click 另有 `effect: true` 点击效果验证(DOM/URL/网络动静摘要,what 多候选首击无动静自动换选);自动穿透跨域子 Frame 与 open Shadow DOM |
+| `browser_select` | 下拉选择原语:原生 `<select>` 与 antd / element-plus / ARIA listbox 通用,selector/ref/what + option 文本一步完成;找不到选项时报错并列出可见选项 |
 | `browser_form_fill` | 智能批量表单填写:一次调用自动识别并填充多个表单控件,结合 UI 适配器自动反查 label、处理输入/选择与弹层并支持稳态等待 |
 | `browser_eval` | 在页面上下文执行 JS(结果自动净化成 lossless JSON) |
 | `browser_batch` | 动作批处理:一次调用顺序执行多个步骤 `[{tool, args}]`(点击→等待→输入→提交类小序列减少往返;禁止嵌套;可录制可回放) |
@@ -74,6 +76,7 @@ dsh plugin --profile web add dsh-browser-view
 | `browser_wait_for_login` | 等待人工登录完成(配 `headless: false` 使用,见下) |
 | `browser_pause_for_human` | 人工接管等待:agent 把控制权暂时交还给用户(验证码/二次确认/人工复核),instruction 显示在实时画面面板;`successSelector` / `successUrl` 指定完成条件,都不给则 URL/页面内容变化即视为完成;轮询 2 秒,超时返回 `completed: false` 不抛错 |
 | `browser_confirm` | 敏感操作审批:提交/删除/支付类动作前调用,审批请求推送到实时画面面板等待用户点「允许/拒绝」;允许返回 `decision: "allowed"`,拒绝/超时(fail-closed)抛错,live 与 replay/batch 统一按失败处理 |
+| `browser_pick_element` | 面板点选教学:调用后实时画面大图显示十字光标,用户点一下目标元素,返回稳定 selector + 自愈兼容指纹 + 可直接使用的 ref;定位失败 2 次后改走人工指路比继续猜选择器更高效 |
 | `browser_wait_for` | 通用显式等待(元素状态 / URL / 文本 / 数量 / eval,超时抛错) |
 | `browser_assert` | 结构化断言(失败自动截图存证据目录并报错);`visual: { baseline }` 做视觉回归断言(见下) |
 | `browser_network` | 接口记录查询:list / failed(4xx/5xx)/ wait(命中返回 waitMs,超时附最近请求摘要)/ stats(按 host 聚合计数/失败数/均耗时/状态码分布)/ clear,含请求/响应体(截断) |
@@ -133,7 +136,7 @@ browser_screenshot  # 证据
   - button "登录" [ref=e3]
 ```
 
-后续 `browser_click { ref: "e3" }`、`browser_type { ref: "e2", text }`、`browser_select { ref, option }`、`browser_press { ref, key }` 直接用 ref 代替 CSS 选择器——比手写选择器更稳、比文本快照更省 token。ref 解析时会校验元素的 role/name 仍一致(防漂移误点),不一致自动降级 `getByRole`;页面导航或重新快照后旧 ref 失效(报错提示重取)。读正文仍用默认 `mode: "text"`。
+后续 `browser_click { ref: "e3" }`、`browser_type { ref: "e2", text }`、`browser_select { ref, option }`、`browser_press { ref, key }` 直接用 ref 代替 CSS 选择器——比手写选择器更稳、比文本快照更省 token。ref 解析时会校验元素的 role/name 仍一致(防漂移误点),不一致自动降级 `getByRole`,再失灵按快照时的视口坐标兜底(`elementFromPoint` + 相似校验)。SPA 客户端路由切换后默认走**软失效重锚定**(按 role+name 指纹把旧 ref 重映射到新 DOM,免整轮快照;`refReanchor: false` 回退导航即失效);整页跳转仍报错提示重取。读正文仍用默认 `mode: "text"`;多模态场景 `browser_screenshot { som: true }` 后可直接 `browser_click { mark: N }` 点标徽。
 
 **动作批处理**:固定小序列用 `browser_batch` 一次往返执行:
 
