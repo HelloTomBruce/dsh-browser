@@ -3,3 +3,4 @@ lib
 .dsh-browser
 *.log
 .DS_Store
+.zcode/
