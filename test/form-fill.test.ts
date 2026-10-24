@@ -2,7 +2,7 @@
 // 智能批量表单填充工具 (browser_form_fill) 测试
 import { describe, expect, it, vi } from "vitest";
 import { formFillTool } from "../src/browser/tools/interaction.js";
-import { adapterRegistry } from "../src/browser/adapters/index.js";
+import * as primitives from "../src/browser/primitives/index.js";
 import type { BrowserConfig } from "../src/browser/types.js";
 
 // Mock getPage
@@ -30,8 +30,8 @@ describe("智能批量表单填充 (browser_form_fill)", () => {
     };
     (getPage as any).mockResolvedValue(mockPage);
 
-    // Mock 适配器 fillFormField
-    const fillSpy = vi.spyOn(adapterRegistry, "fillFormField").mockImplementation(async (_page, field) => {
+    // Mock 填充助手 fillFormFieldHelper
+    const fillSpy = vi.spyOn(primitives, "fillFormFieldHelper").mockImplementation(async (_page, field) => {
       if (field.key === "username") return { handled: true };
       if (field.key === "city") return { handled: true };
       if (field.key === "unknown_field") return { handled: false, error: "元素未匹配" };
@@ -67,7 +67,7 @@ describe("智能批量表单填充 (browser_form_fill)", () => {
     };
     (getPage as any).mockResolvedValue(mockPage);
 
-    const fillSpy = vi.spyOn(adapterRegistry, "fillFormField").mockResolvedValue({ handled: true });
+    const fillSpy = vi.spyOn(primitives, "fillFormFieldHelper").mockResolvedValue({ handled: true });
 
     const res = await formFillTool(config, {
       fields: { title: "Test Title" },

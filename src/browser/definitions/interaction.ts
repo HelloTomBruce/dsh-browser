@@ -15,12 +15,14 @@ export function getInteractionTools(
   return [
     definePlainTool({
       name: "browser_click",
-      description: "点击页面元素:selector(CSS)或 ref(来自 browser_snapshot mode:'aria')二选一。",
+      description: "点击页面元素:selector(CSS)或 ref(来自 browser_snapshot mode:'aria')二选一。也可通过 row(如 'TASK-1002') 与 action(如 '编辑') 直接定位表格中某行操作按钮，无需拼接脆弱选择器。",
       parameters: {
         type: "object",
         properties: {
           selector: { type: "string", description: "CSS 选择器。" },
           ref: { type: "string", description: "aria 快照的 ref(如 'e3');导航后失效。" },
+          row: { type: "string", description: "表格行文本标识，如 'TASK-1002'，用于行级定向操作。" },
+          action: { type: "string", description: "行内操作按钮文本，如 '编辑'、'删除'、'详情'。" },
           timeoutMs: { type: "integer" },
         },
         additionalProperties: false,
@@ -106,7 +108,7 @@ export function getInteractionTools(
     definePlainTool({
       name: "browser_select",
       description:
-        "下拉选择原语:原生 <select> 与组件库下拉(antd / element-plus / ARIA listbox)通用。selector 或 ref 指向下拉触发框,option 为选项文本(默认包含匹配,exact=true 精确)。找不到选项时报错并列出可见选项,无需再 browser_eval 探查。",
+        "下拉选择原语:原生 <select> 与组件库下拉(antd / element-plus / ARIA listbox)通用。selector 或 ref 指向下拉触发框,option 为选项文本(默认包含匹配,exact=true 精确)。多选下拉传 clear:true 可在选择前先清空旧标签实现替换语义。找不到选项时报错并列出可见选项,无需再 browser_eval 探查。",
       parameters: {
         type: "object",
         properties: {
@@ -114,6 +116,7 @@ export function getInteractionTools(
           ref: { type: "string", description: "aria 快照的 ref。" },
           option: { type: "string", description: "要选择的选项文本。" },
           exact: { type: "boolean", description: "精确匹配,默认 false(包含匹配)。" },
+          clear: { type: "boolean", description: "是否在选择前先清空已有选中项(对于多选下拉，替换而非叠加旧选项)。" },
           timeoutMs: { type: "integer" },
         },
         required: ["option"],

@@ -125,4 +125,31 @@ describe("统一目标解析器 (Target Resolution Pipeline)", () => {
     const loc = await targetLocator(mockPage, { selector: ".btn" });
     expect(loc).toBe("simple-locator");
   });
+
+  it("当存在多个匹配节点时优先选取 visible=true 的可见元素", async () => {
+    const mockVisibleFirst = { id: "visible-node" };
+    const mockVisibleLocator: any = {
+      count: vi.fn().mockResolvedValue(1),
+      first: vi.fn().mockReturnValue(mockVisibleFirst),
+    };
+
+    const mockBaseFirst = { id: "hidden-first-node" };
+    const mockBaseLocator: any = {
+      count: vi.fn().mockResolvedValue(2),
+      first: vi.fn().mockReturnValue(mockBaseFirst),
+      locator: vi.fn().mockImplementation((subSelector: string) => {
+        if (subSelector === "visible=true") return mockVisibleLocator;
+        return mockBaseLocator;
+      }),
+    };
+
+    const mockPage = {
+      locator: vi.fn().mockReturnValue(mockBaseLocator),
+    } as unknown as Page;
+
+    const res = await resolveTargetLocator(mockPage, { selector: ".ant-dropdown-menu-item" });
+    expect(res.locator).toBe(mockVisibleFirst);
+    expect(res.matchedCount).toBe(2);
+    expect(res.visibleCount).toBe(1);
+  });
 });

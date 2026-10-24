@@ -26,4 +26,18 @@ describe("injectWalker(F5 构建期拼装)", () => {
     const fn = injectWalker<number, number>((p, _w) => p * 2);
     expect(fn(21)).toBe(42);
   });
+
+  it("无 href 但带文本内容的 a 标签应被推断为 button 角色", () => {
+    const fn = injectWalker<unknown, string>((_p, w) => {
+      const mockAnchor = {
+        tagName: "A",
+        getAttribute: () => null,
+        hasAttribute: (attr: string) => attr !== "href",
+        textContent: "2026-10-22",
+        children: [],
+      } as unknown as Element;
+      return w.roleOf(mockAnchor);
+    });
+    expect(fn(null)).toBe("button");
+  });
 });

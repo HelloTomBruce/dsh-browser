@@ -30,10 +30,9 @@
     "lint": "biome check src test",
     "format": "biome format --write src test",
     "test": "vitest run",
-    "test:regression": "tsx scripts/test-v05-regression.ts",
-    "test:v06": "tsx scripts/test-v06-regression.ts",
-    "dev:test": "tsx scripts/dev-test.ts",
-    "dev:login": "tsx scripts/login-wait.ts",
+    "test:algo": "tsx scripts/test-dev-server-algo-config.ts",
+    "test:enterprise": "tsx scripts/test-dev-server-enterprise.ts",
+    "test:energy": "tsx scripts/test-dev-server-energy.ts",
     "dev:server": "tsx scripts/dev-server.ts",
     "verify": "npm run typecheck && npm run lint && npm run test && npm run build",
     "prepublishOnly": "npm run verify"

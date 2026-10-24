@@ -8,7 +8,7 @@ import { workspaceBaseDir } from "../../lib/tools.js";
 import { injectWalker } from "../walker.js";
 import { formatFromFile, serializeRows } from "../extract.js";
 import { workspaceFilePath } from "./common.js";
-import { adapterRegistry } from "../adapters/index.js";
+import { extractVirtualListHelper } from "../primitives/index.js";
 
 export interface ExtractField {
   name: string;
@@ -282,7 +282,7 @@ export async function extractTool(config: BrowserConfig, args: Record<string, an
         fieldMap[f.name] = f.selector;
       }
     }
-    const virtualRows = await adapterRegistry.extractVirtualList(page, {
+    const virtualRows = await extractVirtualListHelper(page, {
       scope: typeof args.scope === "string" ? args.scope : undefined,
       fields: fieldMap,
       maxRows,
@@ -308,8 +308,7 @@ export async function extractTool(config: BrowserConfig, args: Record<string, an
           const disabled =
             (el as HTMLButtonElement).disabled === true ||
             el.getAttribute("aria-disabled") === "true" ||
-            el.classList.contains("disabled") ||
-            el.classList.contains("ant-pagination-disabled");
+            Boolean(el.matches?.("[disabled], [aria-disabled='true'], [class*='-disabled'], [class*='__disabled'], .is-disabled, .disabled"));
           return visible && !disabled;
         })
         .catch(() => false);

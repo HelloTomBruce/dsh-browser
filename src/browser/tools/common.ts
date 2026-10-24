@@ -1,10 +1,12 @@
 // dsh-browser · 浏览器工具 — 通用工具函数与算法
 import { isAbsolute, resolve } from "node:path";
 
-/** 组件库下拉框的可见选项选择器并集(antd / element-plus / 通用 ARIA listbox)。 */
+/** 组件库下拉框的可见选项选择器并集 (基于通用 WAI-ARIA 与主流组件库规范)。 */
 export const DROPDOWN_OPTION_SELECTOR = [
-  ".ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option",
-  ".el-select-dropdown__item",
+  "[role='option']",
+  "[role='menuitem']",
+  "[class*='select'][class*='dropdown'] [class*='option']",
+  "[class*='select'][class*='dropdown'] [class*='item']",
   "[role='listbox'] [role='option']",
 ].join(", ");
 

@@ -1,6 +1,5 @@
-// dsh-browser · 时序组件适配模块 (DateRangePicker & Temporal)
+// dsh-browser · 时序组件原语 (DateRangePicker & Temporal Primitive)
 import type { Locator, Page } from "playwright-core";
-import type { ActionContext } from "../types.js";
 
 export async function fillDateRangeHelper(
   page: Page,
@@ -16,7 +15,7 @@ export async function fillDateRangeHelper(
       // 点击容器激活浮层
       await containerLocator.click().catch(() => {});
       const shortcutBtn = page.locator(
-        `.ant-picker-presets li:has-text("${dateValue}"), .el-picker-panel__shortcut:has-text("${dateValue}"), button:has-text("${dateValue}")`,
+        `[class*='preset'] li:has-text("${dateValue}"), [class*='shortcut']:has-text("${dateValue}"), button:has-text("${dateValue}")`,
       ).first();
       if (await shortcutBtn.isVisible().catch(() => false)) {
         await shortcutBtn.click();
@@ -49,7 +48,7 @@ export async function fillDateRangeHelper(
   // 3. 单日期回退设值
   if (typeof dateValue === "string") {
     const input = containerLocator.locator("input").first();
-    if (await input.count()) {
+    if ((await input.count().catch(() => 0)) > 0) {
       await input.click().catch(() => {});
       await input.fill(dateValue).catch(() => {});
       await input.press("Enter").catch(() => {});

@@ -13,6 +13,7 @@ import { safeName as sanitizeName } from "../recordings.js";
 import { workspaceBaseDir } from "../../lib/tools.js";
 import { injectWalker } from "../walker.js";
 import { compressText, diffLines, topSuggestions, pngSize, DROPDOWN_OPTION_SELECTOR, withTimeout } from "./common.js";
+import { getActiveDialog } from "../primitives/index.js";
 
 /**
  * 页内 ARIA 树构建(walker 单一来源:roleOf/nameOf/cssPath/isVisible 与
@@ -64,7 +65,13 @@ const buildAriaTree = injectWalker<{
       lines.push(
         `${"  ".repeat(depth)}- ${role}${name !== "" ? ` "${name.replace(/"/g, "'")}"` : ""}${ref !== "" ? ` [ref=${ref}]` : ""}${expanded !== null ? ` [expanded=${expanded}]` : ""}${disabled ? " [disabled]" : ""}`,
       );
-      return; // 可交互元素不再深入(按钮内 svg/span 等是噪音)
+      // 复合容器角色 (listbox, menu, tablist, tree, grid 等) 需要继续递归其子选项条目
+      if (["listbox", "menu", "menubar", "tablist", "tree", "grid"].includes(role)) {
+        for (const c of Array.from(el.children)) {
+          if (!SKIP_TAGS.has(c.tagName.toLowerCase())) walk(c, depth + 1);
+        }
+      }
+      return; // 其它原子级可交互元素不再深入(按钮内 svg/span 等是噪音)
     }
     if (STRUCTURAL.has(role)) {
       if (!isVisible(el)) return;
@@ -87,8 +94,25 @@ const buildAriaTree = injectWalker<{
     }
   }
 
+  function resolveScopeRoot(scopeStr: string): Element | null {
+    if (!scopeStr) return document.body;
+    const wantsVisible = /:visible\b/.test(scopeStr);
+    const cleanSelector = scopeStr.replace(/:visible\b/g, "").trim() || "*";
+    try {
+      const list = Array.from(document.querySelectorAll(cleanSelector));
+      if (list.length === 0) return null;
+      const visibleList = list.filter((el) => isVisible(el));
+      if (wantsVisible) {
+        return visibleList.length > 0 ? visibleList[visibleList.length - 1] : null;
+      }
+      return visibleList.length > 0 ? visibleList[visibleList.length - 1] : list[0];
+    } catch {
+      return null;
+    }
+  }
+
   if (document.body === null) return { tree: "", refs, truncated: false, scopeMissing: false, prunedCount: 0 };
-  const root = payload.scope ? document.querySelector(payload.scope) : document.body;
+  const root: Element | null = resolveScopeRoot(payload.scope);
   if (root === null) return { tree: "", refs, truncated: false, scopeMissing: true, prunedCount: 0 };
   walk(root, 0);
   return { tree: lines.join("\n"), refs, truncated, scopeMissing: false, prunedCount };
@@ -105,6 +129,23 @@ const findInteractive = injectWalker<{ query: string; exact: boolean; scope: str
   scanned: number;
 }>((payload, w) => {
   const { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible } = w;
+
+  function resolveScopeRoot(scopeStr: string): Element | null {
+    if (!scopeStr) return document.body;
+    const wantsVisible = /:visible\b/.test(scopeStr);
+    const cleanSelector = scopeStr.replace(/:visible\b/g, "").trim() || "*";
+    try {
+      const list = Array.from(document.querySelectorAll(cleanSelector));
+      if (list.length === 0) return null;
+      const visibleList = list.filter((el) => isVisible(el));
+      if (wantsVisible) {
+        return visibleList.length > 0 ? visibleList[visibleList.length - 1] : null;
+      }
+      return visibleList.length > 0 ? visibleList[visibleList.length - 1] : list[0];
+    } catch {
+      return null;
+    }
+  }
 
   /** 最近的结构化祖先(区域上下文,帮助区分多命中)。 */
   function ancestorsOf(el: Element): string[] {
@@ -126,7 +167,7 @@ const findInteractive = injectWalker<{ query: string; exact: boolean; scope: str
   const matches: { role: string; name: string; selector: string; ancestors: string[] }[] = [];
   const candidates: { role: string; name: string }[] = [];
   let scanned = 0;
-  const root = payload.scope ? document.querySelector(payload.scope) : document.body;
+  const root: Element | null = resolveScopeRoot(payload.scope);
   if (root === null) return { matches: [], candidates, scanned: 0 };
 
   const stack: Element[] = [root];
@@ -254,9 +295,40 @@ export async function snapshotTool(config: BrowserConfig, args: Record<string, a
     const data = await mainFrame.evaluate(buildAriaTree, { maxRefs, scope, viewportOnly, viewportPadding });
     if (data.scopeMissing) {
       const isDialogScope = /modal|dialog|drawer/i.test(scope);
-      const hint = isDialogScope
+      let hint = isDialogScope
         ? "。目标容器可能已消失（弹窗/抽屉已关闭、已提交或页面已导航）"
         : "";
+      if (isDialogScope && typeof page.locator === "function") {
+        try {
+          // 从适配器层动态查询当前活动弹窗/抽屉容器，避免在通用工具层硬编码组件库类名
+          const activeDialogLoc = getActiveDialog(page);
+          const count = typeof activeDialogLoc?.count === "function"
+            ? await withTimeout(activeDialogLoc.count(), 1000, "活动弹窗探测").catch(() => 0)
+            : 0;
+          if (count > 0 && typeof activeDialogLoc.first === "function") {
+            const alternate = await withTimeout(
+              activeDialogLoc.first().evaluate((el) => {
+                const role = el.getAttribute("role");
+                if (role === "dialog") return "[role='dialog']";
+                const cls = el.className;
+                if (typeof cls === "string" && cls.trim()) {
+                  const parts = cls.trim().split(/\s+/);
+                  const relevant = parts.find((c) => /modal|dialog|drawer/i.test(c)) || parts[0];
+                  return `.${relevant}`;
+                }
+                return el.tagName.toLowerCase();
+              }),
+              1000,
+              "解析活动弹窗标识",
+            ).catch(() => null);
+            if (alternate) {
+              hint += ` (检测到当前页面存在「${alternate}」容器，可能混淆了弹窗与抽屉类型)`;
+            }
+          }
+        } catch {
+          // 容错探测静默捕获，确保不阻断主错误抛出
+        }
+      }
       throw new Error(`scope 未命中: 页面中没有匹配 "${scope}" 的元素${hint}`);
     }
     const map = new Map<string, RefEntry>(
@@ -565,12 +637,9 @@ export async function elementsTool(config: BrowserConfig, args: Record<string, a
           const text = forLabel?.textContent?.trim();
           if (text) return text;
         }
-        const antItem = el.closest(".ant-form-item");
-        const antLabel = antItem?.querySelector(".ant-form-item-label")?.textContent?.trim();
-        if (antLabel) return antLabel.replace(/[*：:]\s*$/, "");
-        const elItem = el.closest(".el-form-item");
-        const elLabel = elItem?.querySelector(".el-form-item__label")?.textContent?.trim();
-        if (elLabel) return elLabel.replace(/[*：:]\s*$/, "");
+        const formItem = el.closest("[class*='-form-item'], [class*='__form-item'], form, .form-group");
+        const formLabel = formItem?.querySelector("[class*='label'], label")?.textContent?.trim();
+        if (formLabel) return formLabel.replace(/[*：:]\s*$/, "");
         return "";
       }
       const out: Record<string, unknown>[] = [];

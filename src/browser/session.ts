@@ -13,7 +13,6 @@ export * from "./session/target.js";
 
 import { clearPageRefs } from "./session/cache.js";
 import { HUMAN_BINDING, handleHumanEvent, installHumanRecorder } from "./session/recorder.js";
-import { adapterRegistry } from "./adapters/index.js";
 import { sessionTracer } from "./session/tracer.js";
 import { screencastManager } from "./session/screencast.js";
 
@@ -125,10 +124,59 @@ function recordNav(profile: string, url: string): NavEntry {
   return entry;
 }
 
+const DOM_COMPAT_SCRIPT = `
+(() => {
+  if (window.__dsh_compat_initialized) return;
+  window.__dsh_compat_initialized = true;
+  window.__name = (t, v) => t;
+  globalThis.__name = (t, v) => t;
+
+  const origDocQS = Document.prototype.querySelector;
+  const origDocQSA = Document.prototype.querySelectorAll;
+  const origElemQS = Element.prototype.querySelector;
+  const origElemQSA = Element.prototype.querySelectorAll;
+  const isVis = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length) && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none');
+
+  Document.prototype.querySelector = function(sel) {
+    if (typeof sel === 'string' && /:visible\\b/.test(sel)) {
+      const clean = sel.replace(/:visible\\b/g, '').trim() || '*';
+      const list = Array.from(origDocQSA.call(this, clean));
+      return list.find(isVis) || null;
+    }
+    return origDocQS.apply(this, arguments);
+  };
+  Document.prototype.querySelectorAll = function(sel) {
+    if (typeof sel === 'string' && /:visible\\b/.test(sel)) {
+      const clean = sel.replace(/:visible\\b/g, '').trim() || '*';
+      const list = Array.from(origDocQSA.call(this, clean));
+      return list.filter(isVis);
+    }
+    return origDocQSA.apply(this, arguments);
+  };
+  Element.prototype.querySelector = function(sel) {
+    if (typeof sel === 'string' && /:visible\\b/.test(sel)) {
+      const clean = sel.replace(/:visible\\b/g, '').trim() || '*';
+      const list = Array.from(origElemQSA.call(this, clean));
+      return list.find(isVis) || null;
+    }
+    return origElemQS.apply(this, arguments);
+  };
+  Element.prototype.querySelectorAll = function(sel) {
+    if (typeof sel === 'string' && /:visible\\b/.test(sel)) {
+      const clean = sel.replace(/:visible\\b/g, '').trim() || '*';
+      const list = Array.from(origElemQSA.call(this, clean));
+      return list.filter(isVis);
+    }
+    return origElemQSA.apply(this, arguments);
+  };
+})();
+`;
+
 export function attachPage(page: Page, config: BrowserConfig): void {
   const timeoutMs = config.timeoutMs ?? 30000;
   page.setDefaultTimeout(timeoutMs);
-  page.addInitScript("window.__name = (t, v) => t; globalThis.__name = (t, v) => t;").catch(() => {});
+  page.addInitScript(DOM_COMPAT_SCRIPT).catch(() => {});
+  page.evaluate(DOM_COMPAT_SCRIPT).catch(() => {});
   page.on("download", (download) => {
     const list = downloadsOf(currentProfile);
     list.push({ download, suggestedFilename: download.suggestedFilename(), at: Date.now() });
@@ -140,7 +188,6 @@ export function attachPage(page: Page, config: BrowserConfig): void {
     if (frame !== page.mainFrame()) return;
     // 导航后旧 ref 全部失效(元素可能已不存在),防 ref 漂移误点。
     clearPageRefs(page);
-    adapterRegistry.clearCache(page);
     const url = frame.url();
     if (!url || url === "about:blank") return;
     recordNav(profile, url);

@@ -1,4 +1,4 @@
-// dsh-browser · 层级与树选择组件模块 (Cascader & TreeSelect)
+// dsh-browser · 层级与树选择原语 (Cascader & TreeSelect Primitive)
 import type { Locator, Page } from "playwright-core";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -20,7 +20,7 @@ export async function selectPathHelper(
     const segment = path[i];
     const itemLocator = page
       .locator(
-        `.ant-cascader-menu-item:has-text("${segment}"), .el-cascader-node:has-text("${segment}"), [role="menuitem"]:has-text("${segment}"), .ant-tree-treenode:has-text("${segment}"), .ant-cascader-node:has-text("${segment}"), [class*="cascader"]:has-text("${segment}")`,
+        `[role="menuitem"]:has-text("${segment}"), [role="treeitem"]:has-text("${segment}"), [class*="cascader-menu-item"]:has-text("${segment}"), [class*="cascader-node"]:has-text("${segment}"), [class*="tree-treenode"]:has-text("${segment}"), [class*="cascader"]:has-text("${segment}")`,
       )
       .last();
 

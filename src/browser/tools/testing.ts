@@ -34,25 +34,25 @@ export type TestCondition = Record<string, any>;
 
 /** 单次检查:返回 { ok, detail }。不抛错,失败时 detail 给出原因。 */
 export async function checkOnce(page: Page, cond: TestCondition): Promise<{ ok: boolean; detail?: string }> {
-  if (cond.ref !== undefined) {
-    // aria 快照 ref:解析后按 state 等待(默认 visible)
+  if (
+    cond.ref !== undefined ||
+    cond.selector !== undefined ||
+    cond.row !== undefined ||
+    cond.rowText !== undefined
+  ) {
     const state = String(cond.state ?? "visible");
     try {
-      const target = await targetLocator(page, { ref: cond.ref });
+      const target = await targetLocator(page, cond);
       await target.waitFor({ state: state as any, timeout: 120 });
       return { ok: true };
     } catch {
-      return { ok: false, detail: `ref ${String(cond.ref)} 未达到 ${state}` };
-    }
-  }
-  if (cond.selector !== undefined) {
-    const locator = page.locator(String(cond.selector));
-    const state = String(cond.state ?? "visible");
-    try {
-      await locator.waitFor({ state: state as any, timeout: 120 });
-      return { ok: true };
-    } catch {
-      return { ok: false, detail: `元素 ${cond.selector} 未达到 ${state}` };
+      const desc =
+        cond.ref !== undefined
+          ? `ref ${String(cond.ref)}`
+          : cond.row !== undefined || cond.rowText !== undefined
+            ? `row "${String(cond.row ?? cond.rowText)}"`
+            : `元素 ${cond.selector}`;
+      return { ok: false, detail: `${desc} 未达到 ${state}` };
     }
   }
   if (cond.url !== undefined) {
@@ -66,7 +66,12 @@ export async function checkOnce(page: Page, cond: TestCondition): Promise<{ ok: 
   if (cond.text !== undefined) {
     const needle = String(cond.text);
     try {
-      const has = await page.evaluate((s) => (document.body ? document.body.innerText : "").includes(s), needle);
+      const has = await page.evaluate((s) => {
+        const bodyText = document.body ? document.body.innerText || "" : "";
+        if (bodyText.includes(s)) return true;
+        const clean = (str: string) => str.replace(/[\s\u00a0]+/g, "").toLowerCase();
+        return clean(bodyText).includes(clean(s));
+      }, needle);
       return has ? { ok: true } : { ok: false, detail: `页面文本不含 "${needle}"` };
     } catch (e) {
       return { ok: false, detail: `文本检查失败: ${e instanceof Error ? e.message : String(e)}` };
@@ -75,7 +80,11 @@ export async function checkOnce(page: Page, cond: TestCondition): Promise<{ ok: 
   if (cond.count !== undefined && typeof cond.count === "object") {
     const c = cond.count as { selector: string; op?: string; value: number };
     try {
-      const actual = await page.locator(String(c.selector)).count();
+      let sel = String(c.selector);
+      if (/:visible\b/.test(sel)) {
+        sel = sel.replace(/:visible\b/g, " >> visible=true");
+      }
+      const actual = await page.locator(sel).count();
       const want = Number(c.value);
       const op = c.op ?? "eq";
       const ok =
@@ -92,7 +101,12 @@ export async function checkOnce(page: Page, cond: TestCondition): Promise<{ ok: 
   }
   if (cond.eval !== undefined) {
     try {
-      const value = await page.evaluate(String(cond.eval));
+      const script = String(cond.eval).trim();
+      // 语法归一化: 消除 eval 语法差异，统一支持纯表达式与带 return / 语句块的形式
+      const wrapped = /[\n;]|^\s*return\b/.test(script)
+        ? `(async () => {\n${script}\n})()`
+        : `(${script})`;
+      const value = await page.evaluate(wrapped);
       return value ? { ok: true } : { ok: false, detail: `eval 条件为假: ${cond.eval}` };
     } catch (e) {
       return { ok: false, detail: `eval 执行失败: ${e instanceof Error ? e.message : String(e)}` };
@@ -127,7 +141,8 @@ export async function waitForTool(config: BrowserConfig, args: Record<string, an
   const page = await getPage(config);
   const timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? 10_000) || 10_000, 1_000), 120_000);
   const intervalMs = Math.max(Number(args.intervalMs ?? 500) || 500, 100);
-  const result = await pollCondition(page, args.condition, timeoutMs, intervalMs);
+  const cond = args.condition ?? args;
+  const result = await pollCondition(page, cond, timeoutMs, intervalMs);
   if (!result.ok) {
     throw new Error(`等待条件超时(${timeoutMs}ms): ${result.detail ?? "条件未满足"}`);
   }
@@ -142,7 +157,8 @@ export async function assertTool(config: BrowserConfig, args: Record<string, any
   }
   const timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? 5_000) || 5_000, 100), 60_000);
   const intervalMs = Math.max(Number(args.intervalMs ?? 300) || 300, 50);
-  const result = await pollCondition(page, args.condition, timeoutMs, intervalMs);
+  const cond = args.condition ?? args;
+  const result = await pollCondition(page, cond, timeoutMs, intervalMs);
   if (result.ok) {
     return { passed: true, ...(await pageIdentity(page)) };
   }

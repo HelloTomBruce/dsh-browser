@@ -37,7 +37,7 @@ export function getTestingTools(
     definePlainTool({
       name: "browser_wait_for",
       description:
-        "通用显式等待(测试同步原语):轮询直到条件成立或超时抛错。condition 四类:1) {selector:'#btn', state:'visible|hidden|attached|detached'} 元素状态(默认 visible);2) {url:'正则字符串'} 当前 URL 匹配;3) {text:'子串'} 页面可见文本包含;4) {count:{selector,op:'eq|gt|gte|lt|lte',value}} 元素数量比较;5) {eval:'JS 表达式'} 求值 truthy。用于等页面渲染、等请求完成、等元素出现。",
+        "通用显式等待(测试同步原语):轮询直到条件成立或超时抛错。condition 格式(可放在 condition 对象内，也可直接平铺于顶层参数): 1) {selector:'#btn', state:'visible|hidden|attached|detached'}; 2) {ref:'e1', state}; 3) {row:'TASK-1002', action:'编辑', state}; 4) {url:'正则'}; 5) {text:'子串'}; 6) {count:{selector,op,value}}; 7) {eval:'JS 表达式' (支持纯表达式或 return 语句)}。用于等页面渲染、等请求完成、等元素出现。",
       parameters: {
         type: "object",
         properties: {
@@ -68,7 +68,7 @@ export function getTestingTools(
     definePlainTool({
       name: "browser_assert",
       description:
-        "结构化断言(测试核心):condition 在 timeoutMs 内成立则通过(条件格式同 browser_wait_for,另支持 ref)。失败时自动截图存证据目录(assert-fail-*.png)并抛错,错误消息含原因与截图路径。另支持视觉回归:传 visual={baseline, threshold?, maxDiffRatio?, mask?} 与基线截图做像素比对(browser_screenshot 的 baseline 建立基线;mask 为忽略的选择器数组,如时钟/广告位),失败时产出当前截图与红标 diff 图。适合断言登录成功、关键元素出现、接口返回、文本正确、页面无视觉回归。",
+        "结构化断言(测试核心):condition 在 timeoutMs 内成立则通过(条件格式同 browser_wait_for，支持 selector/ref/row+action/url/text/count/eval，亦可直接平铺在顶层参数)。失败时自动截图存证据目录(assert-fail-*.png)并抛错,错误消息含原因与截图路径。另支持视觉回归:传 visual={baseline, threshold?, maxDiffRatio?, mask?} 与基线截图做像素比对(browser_screenshot 的 baseline 建立基线;mask 为忽略的选择器数组,如时钟/广告位),失败时产出当前截图与红标 diff 图。适合断言登录成功、关键元素出现、接口返回、文本正确、页面无视觉回归。",
       parameters: {
         type: "object",
         properties: {

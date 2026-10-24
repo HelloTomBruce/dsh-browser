@@ -1,6 +1,6 @@
-// dsh-browser · 虚拟长列表与表格抽取模块 (Virtual Scroller & Extractor)
+// dsh-browser · 虚拟长列表与表格抽取原语 (Virtual Scroller & Extractor)
 import type { Page } from "playwright-core";
-import type { VirtualExtractOptions } from "../types.js";
+import type { VirtualExtractOptions } from "./types.js";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -10,7 +10,8 @@ export async function extractVirtualListHelper(
 ): Promise<Record<string, any>[]> {
   const { scope, fields, maxRows = 1000, stepPixels = 350 } = options;
   const containerSelector =
-    scope || ".ant-table-body, .el-table__body-wrapper, [class*='virtual-list'], [style*='overflow-y: auto'], [style*='overflow: auto']";
+    scope ||
+    "[style*='overflow-y: auto'], [style*='overflow-y: scroll'], [style*='overflow: auto'], [class*='table-body'], [class*='body-wrapper'], [class*='virtual']";
 
   const results: Record<string, any>[] = [];
   const seenHashes = new Set<string>();
@@ -23,9 +24,8 @@ export async function extractVirtualListHelper(
     const currentRows: Record<string, any>[] = await page.evaluate(
       ({ containerSel, fieldMap }) => {
         const container = document.querySelector(containerSel) || document.body;
-        // 启发式寻找行节点
         const rows = container.querySelectorAll(
-          ".ant-table-row, .el-table__row, [role='row'], [class*='list-item'], [class*='virtual-item']",
+          "tr, [role='row'], [class*='table-row'], [class*='list-item'], [class*='virtual-item']",
         );
         const data: Record<string, any>[] = [];
 

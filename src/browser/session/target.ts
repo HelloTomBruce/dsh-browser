@@ -1,9 +1,30 @@
 // dsh-browser · 统一目标定位解析门面 (Target Resolution Pipeline)
 import type { Frame, Locator, Page } from "playwright-core";
-import { extractElementLabel, getActiveDialog } from "../adapters/dom.js";
+import { extractElementLabel, getActiveDialog } from "../primitives/index.js";
 import { pageRef } from "./cache.js";
 import { withTimeout } from "../tools/common.js";
 import type { TargetResolution } from "../types.js";
+
+/**
+ * 构造对字符间/词间任意空白不敏感的匹配正则。
+ * 处理中英文混排、单字间隔、Tab、换行以及 &nbsp; 等特殊空白字符。
+ */
+export function buildFlexibleTextPattern(text: string): RegExp {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return new RegExp("");
+  }
+  const tokens: string[] = [];
+  const regex = /[\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]|[a-zA-Z0-9_-]+|[^\s]/g;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(trimmed)) !== null) {
+    tokens.push(m[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  }
+  if (tokens.length <= 1) {
+    return new RegExp(trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+  }
+  return new RegExp(tokens.join("[\\s\\u00a0]*"), "i");
+}
 
 /**
  * 统一解析目标元素：
@@ -79,13 +100,15 @@ export async function resolveTargetLocator(
               /* ignore */
             }
 
+            const clean = (s: string) => s.replace(/[\s\u00a0]+/g, "").toLowerCase();
+            const q = clean(name);
             const nameOk =
               name === "" ||
-              aria.includes(name) ||
-              ph.includes(name) ||
-              title.includes(name) ||
-              text.includes(name) ||
-              labelText.includes(name);
+              clean(aria).includes(q) ||
+              clean(ph).includes(q) ||
+              clean(title).includes(q) ||
+              clean(text).includes(q) ||
+              clean(labelText).includes(q);
 
             return roleOk && nameOk;
           },
@@ -111,7 +134,7 @@ export async function resolveTargetLocator(
         if (activeDialog && typeof activeDialog.getByRole === "function") {
           const inDialog =
             entry.name !== ""
-              ? activeDialog.getByRole(entry.role as any, { name: entry.name }).first()
+              ? activeDialog.getByRole(entry.role as any, { name: buildFlexibleTextPattern(entry.name) }).first()
               : activeDialog.getByRole(entry.role as any).first();
 
           if ((await withTimeout(inDialog.count(), 1_000, "弹窗内 role 查找").catch(() => 0)) > 0) {
@@ -123,10 +146,10 @@ export async function resolveTargetLocator(
       }
     }
 
-    // 降级 2: role + name
+    // 降级 2: role + name (使用字符间空白容错正则)
     const byRole =
       entry.name !== ""
-        ? container.getByRole(entry.role as any, { name: entry.name }).first()
+        ? container.getByRole(entry.role as any, { name: buildFlexibleTextPattern(entry.name) }).first()
         : container.getByRole(entry.role as any).first();
 
     if ((await withTimeout(byRole.count(), 3_000, "解析 ref role 降级").catch(() => 0)) > 0) {
@@ -138,14 +161,109 @@ export async function resolveTargetLocator(
     );
   }
 
+  // 0. 特性: 表格行级定向解析 (Row Scoping Pipeline)
+  // 当传入 rowText/row (如 row: "TASK-1002", action: "编辑") 时，自动通过 Playwright filter 构造抗脆弱行内定位器
+  const rowPattern = args.rowText ?? args.row;
+  const actionPattern = args.actionText ?? args.action;
+  if (rowPattern !== undefined) {
+    const rowLoc = page.locator("tr, [role='row']").filter({ hasText: buildFlexibleTextPattern(String(rowPattern)) });
+    let targetLoc: Locator;
+    if (actionPattern !== undefined) {
+      const actStr = String(actionPattern).trim();
+      targetLoc = rowLoc
+        .locator("button, a, [role='button'], [role='link']")
+        .filter({ hasText: buildFlexibleTextPattern(actStr) })
+        .first();
+    } else {
+      targetLoc = rowLoc.locator(args.selector || "button, a, [role='button'], [role='link']").first();
+    }
+
+    return {
+      locator: targetLoc,
+      container: page,
+      isIFrame: false,
+    };
+  }
+
   if (args.selector === undefined) {
-    throw new Error("需要 selector 或 ref 之一");
+    throw new Error("需要 selector 或 ref 之一 (或指定 row 与 action 进行表格行级定界)");
+  }
+
+  let rawSelector = String(args.selector);
+  // 语法兼容: 自动将 jQuery 风格的 :visible 伪类转换为 Playwright 标准规范 (>> visible=true)
+  if (/:visible\b/.test(rawSelector)) {
+    rawSelector = rawSelector.replace(/:visible\b/g, " >> visible=true");
+  }
+  let baseLocator = page.locator(rawSelector);
+
+  // 语法自愈: 对于 :has-text('...') 选择器，若直接查找无命中，自动采用全语言分词与空白容错匹配自愈
+  const hasTextMatch = rawSelector.match(/^(.*?):has-text\(['"](.+?)['"]\)(.*)$/);
+  if (hasTextMatch) {
+    const directCount = await withTimeout(baseLocator.count(), 1_000, "探测 has-text").catch(() => 0);
+    if (directCount === 0) {
+      const [, prefix, text, suffix] = hasTextMatch;
+      const flexPattern = buildFlexibleTextPattern(text);
+      let flexLoc = page.locator(prefix.trim() || "*").filter({ hasText: flexPattern });
+      if (suffix && suffix.trim()) {
+        flexLoc = flexLoc.locator(suffix.trim());
+      }
+      if ((await withTimeout(flexLoc.count(), 1_000, "探测容错 has-text").catch(() => 0)) > 0) {
+        baseLocator = flexLoc;
+      }
+    }
+  }
+
+  // 1. 若当前页面存在激活的 Modal / Dialog，优先检查弹窗内是否有匹配目标(防穿透)
+  try {
+    const activeDialog = getActiveDialog(page);
+    if (activeDialog && typeof activeDialog.locator === "function") {
+      const inDialog = activeDialog.locator(rawSelector);
+      if (typeof inDialog.count === "function") {
+        const inDialogCount = await withTimeout(inDialog.count(), 1_000, "弹窗内 selector 探测").catch(() => 0);
+        if (inDialogCount > 0) {
+          const inDialogVisible = typeof inDialog.locator === "function" ? inDialog.locator("visible=true") : null;
+          const visibleCount =
+            inDialogVisible && typeof inDialogVisible.count === "function"
+              ? await withTimeout(inDialogVisible.count(), 1_000, "弹窗内可见探测").catch(() => 0)
+              : 0;
+          return {
+            locator: visibleCount > 0 && typeof inDialogVisible?.first === "function" ? inDialogVisible.first() : inDialog.first(),
+            container: page,
+            isIFrame: false,
+            matchedCount: inDialogCount,
+            visibleCount,
+          };
+        }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // 2. 统计总数并优先采用可见节点(Smart Visibility Arbitration)
+  let totalCount: number | undefined;
+  let visibleCount: number | undefined;
+  let target = typeof baseLocator.first === "function" ? baseLocator.first() : baseLocator;
+
+  if (typeof baseLocator.count === "function") {
+    totalCount = await withTimeout(baseLocator.count(), 2_000, "selector 计数").catch(() => 0);
+    if (totalCount > 0 && typeof baseLocator.locator === "function") {
+      const visibleLocator = baseLocator.locator("visible=true");
+      if (typeof visibleLocator.count === "function") {
+        visibleCount = await withTimeout(visibleLocator.count(), 1_000, "selector 可见计数").catch(() => 0);
+        if (visibleCount > 0 && typeof visibleLocator.first === "function") {
+          target = visibleLocator.first();
+        }
+      }
+    }
   }
 
   return {
-    locator: page.locator(String(args.selector)).first(),
+    locator: target,
     container: page,
     isIFrame: false,
+    ...(totalCount !== undefined ? { matchedCount: totalCount } : {}),
+    ...(visibleCount !== undefined ? { visibleCount } : {}),
   };
 }
 

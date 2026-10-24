@@ -12,11 +12,19 @@ import {
 } from "../session.js";
 import { workspaceBaseDir } from "../../lib/tools.js";
 import { withTimeout, unwrapDoubleEncodedScript, workspaceFilePath } from "./common.js";
-import { executeSelectAdapter } from "../adapters/select.js";
-import { extractElementLabel, getActiveDialog } from "../adapters/dom.js";
-import { adapterRegistry } from "../adapters/index.js";
-import { waitForDOMQuiescence } from "../adapters/quiescence.js";
-import type { FormFillResult } from "../adapters/types.js";
+import {
+  isElementDisabled,
+  waitForDOMQuiescence,
+  liftTargetIfHiddenInput,
+  isMaskInterceptionError,
+  executeUniversalSelect,
+  fillEditorHelper,
+  fillFormFieldHelper,
+  transferItemsHelper,
+  dragAndDropHelper,
+  type FormFillResult,
+} from "../primitives/index.js";
+import * as primitives from "../primitives/index.js";
 import { humanClick } from "../stealth/mouse.js";
 import { humanType } from "../stealth/keyboard.js";
 
@@ -29,12 +37,12 @@ export function isBotSensitiveUrl(url: string): boolean {
 
 export async function clickTool(config: BrowserConfig, args: Record<string, any>) {
   const page = await getPage(config);
-  let target = await targetLocator(page, args);
+  const targetRes = await resolveTargetLocator(page, args);
+  let target = targetRes.locator;
   const label = String(args.ref ?? args.selector ?? "");
 
-  // 1. 适配器动作前置预处理 (例如隐藏 input 点击目标提升)
-  const lifted = await adapterRegistry.beforeAction({ page, config, target, action: "click", args });
-  if (lifted) target = lifted;
+  // 1. 隐藏 input 点击目标提升 (Target Lifting)
+  target = await liftTargetIfHiddenInput(target);
 
   const isHuman =
     args.humanize === true ||
@@ -55,6 +63,18 @@ export async function clickTool(config: BrowserConfig, args: Record<string, any>
         const firstTimeout = explicitTimeout ? timeoutMs : Math.min(timeoutMs, 5000);
         await target.click({ timeout: firstTimeout, force: args.force === true });
       } catch (firstErr) {
+        // 快速检测是否为禁用元素：若是禁用状态，则无需做无谓的 force 穿透重试，直接抛出高导向性错误
+        const hasElem = (await target.count().catch(() => 0)) > 0;
+        const isDisabled = hasElem
+          ? await withTimeout(target.first().evaluate(isElementDisabled), 1_000, "检测禁用状态").catch(() => false)
+          : false;
+
+        if (isDisabled) {
+          throw new Error(
+            `目标元素当前处于禁用状态 (disabled/aria-disabled/disabled class)，无法执行点击操作。提示：前置业务条件可能未满足（例如未勾选前置表格行、或表单必填项尚未完整填写）`,
+          );
+        }
+
         if (!explicitTimeout && args.force !== true) {
           await target.click({ timeout: 3000, force: true });
         } else {
@@ -63,14 +83,19 @@ export async function clickTool(config: BrowserConfig, args: Record<string, any>
       }
     }
   } catch (e) {
-    // 2. 适配器动作异常自愈 (例如遮罩层拦截与动画恢复)
-    const recovered = await adapterRegistry.onActionError({ page, config, target, action: "click", args }, e as Error);
-    if (recovered?.handled && recovered.retryWith) {
-      await (recovered.retryWith.target ?? target).click({
-        timeout: recovered.retryWith.timeoutMs ?? 3000,
-        force: recovered.retryWith.force ?? false,
-      });
-    } else {
+    // 2. 遮罩层动画拦截自愈
+    let healed = false;
+    if (isMaskInterceptionError(e as Error)) {
+      await page.waitForTimeout(100);
+      try {
+        await target.click({ timeout: 3000, force: true });
+        healed = true;
+      } catch {
+        // 恢复失败，继续走常规诊断
+      }
+    }
+
+    if (!healed) {
       // 超时诊断:区分「元素没匹配到」与「匹配到但不可交互」;点击引发的导航竞态
       // (事件已派发但 promise 超时)给提示,让 agent 用 snapshot 确认实际状态。
       const msg = e instanceof Error ? e.message : String(e);
@@ -80,7 +105,15 @@ export async function clickTool(config: BrowserConfig, args: Record<string, any>
         if (n === 0) diag = "元素未匹配(selector 可能写错或元素未渲染)";
         else {
           const visible = await target.first().isVisible();
-          diag = visible ? "元素可见但不可交互(被遮挡/禁用?);若页面刚发生跳转,点击可能实际已生效" : "元素存在但不可见";
+          const isDisabled = await withTimeout(target.first().evaluate(isElementDisabled), 1_000, "检测禁用状态").catch(() => false);
+          if (isDisabled) {
+            diag = "目标元素当前处于禁用状态 (disabled/aria-disabled/disabled class)，无法执行操作。提示：前置业务条件可能未满足（例如未勾选前置表格行、或表单必填项尚未完整填写）";
+          } else {
+            diag = visible ? "元素可见但不可交互(被遮挡或有透明遮罩);若页面刚发生跳转,点击可能实际已生效" : "元素存在但不可见";
+          }
+          if (targetRes.matchedCount !== undefined && targetRes.matchedCount > 1) {
+            diag += ` (当前选择器在页面中匹配到了 ${targetRes.matchedCount} 个元素，其中可见 ${targetRes.visibleCount ?? 0} 个；可能存在隐藏同构节点干扰，建议优先使用特异性属性如 [data-menu-id] 或通过 browser_snapshot 提取 [ref])`;
+          }
         }
       } catch {
         diag = "元素已从页面移除(若页面刚发生跳转,点击可能实际已生效)";
@@ -90,14 +123,13 @@ export async function clickTool(config: BrowserConfig, args: Record<string, any>
   }
 
   // 3. 稳态等待（兼顾传统整页导航与 SPA 单页渲染）
-  const adapter = await adapterRegistry.getActiveAdapter(page);
   await Promise.race([
     page.waitForLoadState("domcontentloaded").catch(() => {}),
-    adapter.waitForQuiescence ? adapter.waitForQuiescence(page, { quietMs: 60 }) : Promise.resolve(),
+    waitForDOMQuiescence(page, { quietMs: 60 }),
   ]);
 
   return {
-    clicked: String(args.ref ?? args.selector),
+    clicked: String(args.ref ?? args.selector ?? (args.row ? `row: ${args.row}` : "target")),
     ...(await pageIdentity(page)),
   };
 }
@@ -113,11 +145,7 @@ export async function typeTool(config: BrowserConfig, args: Record<string, any>)
 
   if (args.editor === true) {
     const selector = String(args.ref ?? args.selector ?? "");
-    const handled = await adapterRegistry.fillEditorContent(
-      { page, config, target, action: "type", args },
-      selector,
-      text,
-    );
+    const handled = await fillEditorHelper(page, selector, text);
     if (handled) {
       return {
         typed: true,
@@ -227,13 +255,14 @@ export async function selectTool(config: BrowserConfig, args: Record<string, any
   const exact = args.exact === true;
   const timeout = args.timeoutMs ?? config.timeoutMs;
 
-  const result = await executeSelectAdapter({
+  const result = await executeUniversalSelect({
     page,
     target,
     label,
     want,
     exact,
     timeout,
+    clear: args.clear === true,
   });
 
   return { selected: result.selected, selector: label, ...(await pageIdentity(page)) };
@@ -440,7 +469,7 @@ export async function formFillTool(
 
   for (const [key, value] of Object.entries(fields)) {
     try {
-      const res = await adapterRegistry.fillFormField(page, { key, value }, scope);
+      const res = await primitives.fillFormFieldHelper(page, { key, value }, scope);
       if (res.handled) {
         filled.push(key);
         // 轻量稳态等待，保证联动校验和级联渲染平稳完成
@@ -490,21 +519,15 @@ export async function formFillTool(
 
 export async function transferTool(config: BrowserConfig, args: Record<string, any>) {
   const page = await getPage(config);
-  const selector = String(args.selector ?? args.ref ?? ".ant-transfer, .el-transfer");
-  const direction = (args.direction === "left" ? "left" : "right") as "left" | "right";
+  const selector = String(args.selector ?? args.ref ?? "[class*='transfer']");
+  const direction = (args.direction === "left" ? "right-to-left" : "left-to-right") as "left-to-right" | "right-to-left";
   const items = Array.isArray(args.items) ? args.items.map(String) : [];
 
-  const target = await targetLocator(page, { selector });
-  const handled = await adapterRegistry.transferItems(
-    { page, config, target, action: "click", args },
-    selector,
-    direction,
-    items,
-  );
+  const handled = await transferItemsHelper(page, selector, items, direction);
 
   return {
     transferred: handled,
-    direction,
+    direction: args.direction === "left" ? "left" : "right",
     items,
     ...(await pageIdentity(page)),
   };
@@ -518,12 +541,7 @@ export async function dragTool(config: BrowserConfig, args: Record<string, any>)
     throw new Error("drag 需要 source 与 target 选择器");
   }
 
-  const srcLocator = await targetLocator(page, { selector: source });
-  const handled = await adapterRegistry.dragAndDrop(
-    { page, config, target: srcLocator, action: "click", args },
-    source,
-    target,
-  );
+  const handled = await dragAndDropHelper(page, source, target);
 
   return {
     dragged: handled,

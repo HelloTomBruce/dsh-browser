@@ -38,9 +38,26 @@ function __walkerCore() {
   function roleOf(el: Element): string {
     const explicit = el.getAttribute("role");
     if (explicit) return explicit.trim().split(/\s+/)[0] ?? "";
+
+    // 现代 UI 组件库无显式 role 时的通用组件架构范式自愈 (支持各类遵循 BEM / kebab-case 规范的组件库)
+    const cls = typeof el.className === "string" ? el.className : "";
+    if (cls) {
+      if (/(?:modal|dialog|message-box)[-_].*title\b/i.test(cls)) return "heading";
+      if (/(?:select|cascader)[-_].*(?:option|node)\b/i.test(cls) || /(?:select)[-_].*item\b/i.test(cls)) return "option";
+      if (/(?:dropdown|menu)[-_].*(?:item|option)\b/i.test(cls)) return "menuitem";
+      if (/tree[-_].*(?:node|item)\b/i.test(cls)) return "treeitem";
+      if (/tabs?[-_].*(?:tab|item)\b/i.test(cls) && !/pane/i.test(cls)) return "tab";
+    }
+
     const tag = el.tagName.toLowerCase();
     switch (tag) {
-      case "a": return el.hasAttribute("href") ? "link" : "";
+      case "a": {
+        if (el.hasAttribute("href")) return "link";
+        // 现代 Web / SPA (如 Ant Design / Element Plus) 中，无 href 但具备文本内容或子节点的 a 标签通常作为按钮或下拉触发器
+        const text = (el.textContent || "").trim();
+        if (text || el.children.length > 0) return "button";
+        return "";
+      }
       case "button": return "button";
       case "input": {
         const t = (el.getAttribute("type") ?? "text").toLowerCase();
@@ -133,11 +150,19 @@ function __walkerCore() {
   }
 
   function isVisible(el: Element): boolean {
-    if (el.getAttribute("aria-hidden") === "true") return false;
+    if (el.getAttribute("aria-hidden") === "true" || el.hasAttribute("hidden")) return false;
+    const cls = el.className;
+    if (typeof cls === "string" && (cls.includes("-hidden") || cls.includes("is-hidden"))) return false;
     const rect = el.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) return false;
+    if ((rect.width === 0 && rect.height === 0) || rect.left < -1000 || rect.top < -1000) return false;
     const style = getComputedStyle(el);
-    return style.visibility !== "hidden" && style.display !== "none";
+    if (style.visibility === "hidden" || style.display === "none") return false;
+    // 现代 UI 框架 (AntD / Element 等) 中 checkbox / radio 的原生 input 通常设置了 opacity: 0 并由外层 wrapper 承载视觉
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute("type") || "").toLowerCase();
+    const isStyledInput = tag === "input" && (type === "checkbox" || type === "radio");
+    if (!isStyledInput && style.opacity === "0") return false;
+    return true;
   }
 
   /** 纯只读几何判定: 元素是否在当前视口可见区域内(含可选边距扩展)。 */

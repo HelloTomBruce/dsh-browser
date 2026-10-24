@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { dragAndDropHelper } from "../src/browser/adapters/modules/drag.js";
-import { fillEditorHelper } from "../src/browser/adapters/modules/editor.js";
-import { selectPathHelper } from "../src/browser/adapters/modules/hierarchy.js";
-import { fillDateRangeHelper } from "../src/browser/adapters/modules/temporal.js";
-import { transferItemsHelper } from "../src/browser/adapters/modules/transfer.js";
-import { extractVirtualListHelper } from "../src/browser/adapters/modules/virtual.js";
+import {
+  dragAndDropHelper,
+  fillEditorHelper,
+  selectPathHelper,
+  fillDateRangeHelper,
+  transferItemsHelper,
+  extractVirtualListHelper,
+} from "../src/browser/primitives/index.js";
 
 describe("全场景企业级富控件适配矩阵 (Enterprise Component Suite)", () => {
   it("A. 时序组件: DateRangePicker 双日历区间与快捷标签设置", async () => {

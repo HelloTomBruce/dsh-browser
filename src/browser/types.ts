@@ -133,6 +133,10 @@ export interface TargetResolution {
   entry?: RefEntry;
   /** 是否位于子 Frame 中。 */
   isIFrame: boolean;
+  /** 匹配到的总元素数量 (用于排障诊断) */
+  matchedCount?: number;
+  /** 匹配到的可见元素数量 */
+  visibleCount?: number;
 }
 
 /** 录制时采集的选择器指纹(回放自愈的降级候选来源)。 */

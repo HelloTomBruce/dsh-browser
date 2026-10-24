@@ -16,7 +16,9 @@ import {
   transferTool,
   dragTool,
   extractTool,
+  evalTool,
 } from "../src/browser/tools.js";
+import { assertTool, waitForTool } from "../src/browser/tools/testing.js";
 import { screencastManager } from "../src/browser/session/screencast.js";
 import { sessionTracer } from "../src/browser/session/tracer.js";
 import type { BrowserConfig } from "../src/browser/types.js";
@@ -25,7 +27,7 @@ const config: BrowserConfig = {
   channel: "auto",
   executablePath: "",
   headless: process.env.HEADLESS === "true" ? true : false,
-  userDataDir: resolve(".dsh-browser/dev-profile"),
+  userDataDir: process.env.USER_DATA_DIR || "",
   profiles: {},
   screenshotDir: ".dsh-browser/screenshots",
   downloadDir: ".dsh-browser/downloads",
@@ -102,6 +104,9 @@ function startStaticPlaygroundServer(port: number): Promise<http.Server | null> 
       if (urlPath === "/iframe-subpage.html") {
         filePath = resolve("playground/iframe-subpage.html");
       }
+      if (!existsSync(filePath) && existsSync(resolve("playground", urlPath.replace(/^\//, "")))) {
+        filePath = resolve("playground", urlPath.replace(/^\//, ""));
+      }
       if (existsSync(filePath)) {
         const ext = extname(filePath);
         resp.writeHead(200, { "Content-Type": mimeMap[ext] || "application/octet-stream" });
@@ -149,7 +154,7 @@ async function startServer() {
         });
       }
 
-      if (pathname === "/goto" && req.method === "POST") {
+      if ((pathname === "/goto" || pathname === "/open") && req.method === "POST") {
         const body = await readJson(req);
         const target = String(body.url || "").trim();
         if (!target) return sendJson(res, 400, { error: "url is required" });
@@ -246,16 +251,22 @@ async function startServer() {
         return sendJson(res, 200, { ok: true, metrics });
       }
 
+      if (pathname === "/assert" && req.method === "POST") {
+        const body = await readJson(req);
+        const assertRes = await runWithTrace("browser_assert", body, () => assertTool(config, body));
+        return sendJson(res, 200, assertRes);
+      }
+
+      if (pathname === "/wait_for" && req.method === "POST") {
+        const body = await readJson(req);
+        const waitRes = await runWithTrace("browser_wait_for", body, () => waitForTool(config, body));
+        return sendJson(res, 200, waitRes);
+      }
+
       if (pathname === "/eval" && req.method === "POST") {
         const body = await readJson(req);
-        const script = String(body.script || "");
-        let result: any;
-        try {
-          result = await page.evaluate(script);
-        } catch {
-          result = await page.evaluate(`(() => { return (${script}); })()`);
-        }
-        return sendJson(res, 200, { ok: true, result });
+        const evalRes = await evalTool(config, body);
+        return sendJson(res, 200, { ok: true, ...evalRes });
       }
 
       if (pathname === "/screenshot" && req.method === "POST") {

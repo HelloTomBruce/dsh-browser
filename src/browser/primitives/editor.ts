@@ -1,4 +1,4 @@
-// dsh-browser · 富文本与代码编辑器适配模块 (Monaco & Rich Editors)
+// dsh-browser · 富文本与代码编辑器原语 (Monaco, CodeMirror & Rich Editors)
 import type { Page } from "playwright-core";
 
 export async function fillEditorHelper(
@@ -22,7 +22,6 @@ export async function fillEditorHelper(
             return true;
           }
         }
-        // 如果只有一个全局 editor
         if (editors.length === 1) {
           editors[0].setValue(text);
           return true;
@@ -44,7 +43,6 @@ export async function fillEditorHelper(
 
       if (editable) {
         editable.focus();
-        // 采用 execCommand 或 setRangeText 保持 Undo 撤销链
         document.execCommand("selectAll", false);
         document.execCommand("insertText", false, text);
         editable.dispatchEvent(new Event("input", { bubbles: true }));
