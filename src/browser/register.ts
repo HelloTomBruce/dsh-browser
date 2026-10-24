@@ -112,6 +112,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
           false,
           error instanceof Error ? error.message : String(error),
           activePage(),
+          (error as any)?.locationFailure,
         );
         recordCall({
           tool: def.name,

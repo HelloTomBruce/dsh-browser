@@ -164,6 +164,8 @@ export interface TargetResolution {
   matchedCount?: number;
   /** 匹配到的可见元素数量 */
   visibleCount?: number;
+  /** 语义定位的备选目标(按打分次序,最多 2 个);点击效果验证无变化时自动换选。 */
+  alternates?: Locator[];
 }
 
 /** 录制时采集的选择器指纹(回放自愈的降级候选来源)。 */

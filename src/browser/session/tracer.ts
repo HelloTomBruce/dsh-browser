@@ -33,6 +33,13 @@ export interface StepTraceEntry {
   consoleLogs: ConsoleLogEntry[];
   failedRequests: FailedRequestEntry[];
   thumbnail?: string; // base64 or file path
+  /** 定位失败遥测(M6):失败阶段 + 页面特征,随 /timeline 透出,为按真实流量优化提供数据。 */
+  locationFailure?: {
+    phase: "zeroMatch" | "ambiguous" | "dialogOverlay" | "staleRef" | "coordinateMiss";
+    candidates: number;
+    dialogActive: boolean;
+    hasShadow: boolean;
+  };
 }
 
 class SessionTracer {
@@ -110,6 +117,7 @@ class SessionTracer {
     success: boolean,
     error?: string,
     page?: Page | null,
+    locationFailure?: StepTraceEntry["locationFailure"],
   ): Promise<StepTraceEntry | null> {
     const active = this.activeStepByProfile.get(profile);
     if (!active) return null;
@@ -161,6 +169,7 @@ class SessionTracer {
       consoleLogs: stepLogs,
       failedRequests: stepFailed,
       thumbnail,
+      ...(locationFailure !== undefined ? { locationFailure } : {}),
     };
 
     let traces = this.tracesByProfile.get(profile);

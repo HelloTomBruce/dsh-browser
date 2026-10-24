@@ -242,6 +242,10 @@ export async function resolveSemanticTarget(
   const best = data.matches[0];
   const bestRef = withRefs.length > 0 ? withRefs[0] : undefined;
   const locator: Locator = page.locator(best.selector).first();
+  // 备选目标(打分次序,最多 2 个):点击效果验证无变化时自动换选
+  const alternates = data.matches
+    .slice(1, 3)
+    .map((m) => page.locator(m.selector).first());
   return {
     locator,
     container: page,
@@ -249,6 +253,7 @@ export async function resolveSemanticTarget(
     isIFrame: false,
     matchedCount: data.matches.length,
     visibleCount: data.matches.filter((m) => m.visible).length,
+    ...(alternates.length > 0 ? { alternates } : {}),
   };
 }
 

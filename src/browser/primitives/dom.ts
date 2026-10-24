@@ -173,3 +173,70 @@ export function isMaskInterceptionError(error: Error): boolean {
     msg.includes("is not visible")
   );
 }
+
+// ---------------------------------------------------------------------------
+// 点击效果验证(M6):短窗口 MutationObserver 收集变化元素摘要,回答
+// 「这一下点出了什么动静」——DOM 变化/URL 变化/新请求,三者全空 = 大概率
+// 点了个寂寞(覆盖层拦截/事件被吞),agent 换候选重试而不是干等。
+// ---------------------------------------------------------------------------
+
+import { injectWalker } from "../walker.js";
+
+/** 页内变化收集(walker cssPath 单一来源;dedup + 截断)。 */
+const collectDigestInjector = injectWalker<
+  { windowMs: number; maxItems: number },
+  Promise<{ mutations: string[]; domChanged: boolean }>
+>((payload, w) => {
+  return new Promise<{ mutations: string[]; domChanged: boolean }>((resolve) => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      observer.disconnect();
+      resolve({ mutations: out, domChanged: out.length > 0 });
+    };
+    const note = (el: Element | null, kind: string) => {
+      if (el === null || out.length >= payload.maxItems) return;
+      if (!(el instanceof Element)) return;
+      const sel = w.cssPath(el);
+      const key = `${kind}:${sel}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(`${kind} ${sel}`);
+    };
+    const observer = new MutationObserver((records) => {
+      for (const r of records) {
+        r.addedNodes.forEach((n) => note(n as Element | null, "+"));
+        r.removedNodes.forEach((n) => note(n as Element | null, "-"));
+        if (r.type === "attributes") note(r.target as Element, "~");
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+    setTimeout(finish, payload.windowMs);
+  });
+});
+
+/**
+ * 短窗口变化摘要:监听 windowMs 内的 DOM 变化(新增/删除/属性),返回去重
+ * 截断后的变化元素选择器列表。观察 body 一次挂载,MutationObserver 持续到
+ * 窗口结束;页面不可达返回 {mutations: [], domChanged: false}(不放大错误)。
+ */
+export async function collectChangeDigest(
+  page: Page,
+  options: { windowMs?: number; maxItems?: number } = {},
+): Promise<{ mutations: string[]; domChanged: boolean }> {
+  const windowMs = Math.min(Math.max(options.windowMs ?? 600, 100), 3000);
+  const maxItems = Math.min(Math.max(options.maxItems ?? 10, 1), 30);
+  try {
+    const out = await withTimeout(
+      page.evaluate(collectDigestInjector, { windowMs, maxItems }),
+      windowMs + 2_000,
+      "变化摘要收集",
+    );
+    return out ?? { mutations: [], domChanged: false };
+  } catch {
+    return { mutations: [], domChanged: false };
+  }
+}

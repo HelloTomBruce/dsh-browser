@@ -7,7 +7,7 @@ import type { BrowserConfig, FormField } from "../types.js";
 import {
   getPage, activePage, pageRef, pageIdentity,
   savedForms, lastFormFields, setLastFormFields,
-  downloadsOf, currentProfile,
+  downloadsOf, currentProfile, networkEntries,
   targetLocator, resolveTargetLocator,
 } from "../session.js";
 import { workspaceBaseDir } from "../../lib/tools.js";
@@ -18,6 +18,7 @@ import {
   waitForDOMQuiescence,
   liftTargetIfHiddenInput,
   isMaskInterceptionError,
+  collectChangeDigest,
   executeUniversalSelect,
   fillEditorHelper,
   fillFormFieldHelper,
@@ -155,6 +156,46 @@ export async function clickTool(config: BrowserConfig, args: Record<string, any>
     page.waitForLoadState("domcontentloaded").catch(() => {}),
     waitForDOMQuiescence(page, { quietMs: 60 }),
   ]);
+
+  // 4. 点击效果验证(effect: true):短窗口收集「点出了什么动静」——DOM 变化
+  // 摘要 + URL 变化 + 该 profile 点击后新增的网络请求。语义多候选场景下首击
+  // 无动静自动换次候选再试一次(最多 1 次,标 switchedCandidate)。
+  if (args.effect === true) {
+    const clickAt = Date.now();
+    const urlBefore = page.url();
+    const digest = await collectChangeDigest(page, { windowMs: 600 });
+    let switchedCandidate = false;
+    let finalDigest = digest;
+    if (!digest.domChanged && page.url() === urlBefore && (targetRes.alternates?.length ?? 0) > 0) {
+      const alt = targetRes.alternates![0]!;
+      try {
+        await alt.click({ timeout: 3000 });
+        switchedCandidate = true;
+        finalDigest = await collectChangeDigest(page, { windowMs: 600 });
+      } catch {
+        /* 备选点击失败:维持首击结果,不放大 */
+      }
+    }
+    const urlAfter = page.url();
+    const newRequests = networkEntries(currentProfile)
+      .filter((n) => n.startedAt >= clickAt)
+      .slice(-10)
+      .map((n) => ({ url: n.url, method: n.method, ...(n.status !== undefined ? { status: n.status } : {}) }));
+    const effect = {
+      domChanged: finalDigest.domChanged,
+      ...(finalDigest.mutations.length > 0 ? { mutations: finalDigest.mutations } : {}),
+      urlChanged: urlAfter !== urlBefore,
+      ...(newRequests.length > 0 ? { newRequests } : {}),
+      ...(switchedCandidate ? { switchedCandidate } : {}),
+    };
+    const quiet = !effect.domChanged && !effect.urlChanged && newRequests.length === 0;
+    return {
+      clicked: String(args.ref ?? args.selector ?? args.mark ?? args.what ?? (args.row ? `row: ${args.row}` : "target")),
+      effect,
+      ...(quiet ? { effectHint: "点击后未观察到任何 DOM/URL/网络变化,可能未生效(被遮挡/事件被吞/前置条件未满足);建议 browser_snapshot 核实或换目标" } : {}),
+      ...(await pageIdentity(page)),
+    };
+  }
 
   return {
     clicked: String(args.ref ?? args.selector ?? args.mark ?? args.what ?? (args.row ? `row: ${args.row}` : "target")),

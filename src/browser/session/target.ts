@@ -50,6 +50,20 @@ const coordinateProbe = injectWalker<
   return null;
 });
 
+/** 定位失败页内特征探测(一次 evaluate,best-effort):弹窗激活 + 是否存在 shadow root。 */
+const failureContextProbe = injectWalker<unknown, { dialogActive: boolean; hasShadow: boolean }>(() => {
+  const dialogSel = "[role='dialog'],[role='alertdialog'],[aria-modal='true'],dialog[open]";
+  let hasShadow = false;
+  const all = document.querySelectorAll("*");
+  for (let i = 0; i < all.length && i < 500; i++) {
+    if ((all[i] as Element).shadowRoot !== null) {
+      hasShadow = true;
+      break;
+    }
+  }
+  return { dialogActive: Boolean(document.querySelector(dialogSel)), hasShadow };
+});
+
 /** ref 坐标兜底的名称相似判定:去空白互相包含,或 LCS 占比 ≥ 0.6。 */
 function nameSimilar(a: string, b: string): boolean {
   if (a === "" || b === "") return true;
@@ -245,9 +259,19 @@ export async function resolveTargetLocator(
       }
     }
 
-    throw new Error(
-      `ref ${ref} 已失效(元素不存在或内容已变化);请重新 browser_snapshot { mode: "aria" }`,
-    );
+    {
+      const err = new Error(
+        `ref ${ref} 已失效(元素不存在或内容已变化);请重新 browser_snapshot { mode: "aria" }`,
+      );
+      (err as any).locationFailure = { phase: "staleRef", candidates: 1, dialogActive: false, hasShadow: false };
+      try {
+        const ctx = await withTimeout(page.evaluate(failureContextProbe, undefined), 1_500, "失败特征探测");
+        if (ctx !== null && typeof ctx === "object") (err as any).locationFailure = { phase: "staleRef", candidates: 1, ...(ctx as any) };
+      } catch {
+        /* keep defaults */
+      }
+      throw err;
+    }
   }
 
   // 0.2 SoM 标徽定位 (mark 参数):browser_screenshot { som: true } 返回的标徽
@@ -270,7 +294,11 @@ export async function resolveTargetLocator(
         return { locator: byRole, container: page, isIFrame: false, matchedCount: 1, visibleCount: 1 };
       }
     }
-    throw new Error(`mark ${id} 已失效(元素不存在或内容已变化);请重新 browser_screenshot { som: true }`);
+    {
+      const err = new Error(`mark ${id} 已失效(元素不存在或内容已变化);请重新 browser_screenshot { som: true }`);
+      (err as any).locationFailure = { phase: "staleRef", candidates: 1, dialogActive: false, hasShadow: false };
+      throw err;
+    }
   }
 
   // 0. 特性: 表格行级定向解析 (Row Scoping Pipeline)
@@ -315,6 +343,21 @@ export async function resolveTargetLocator(
     // miss 数据挂在错误对象上,供 clickTool 走 SoM 截图兜底(多模态看图定位)
     const err = new Error(semanticMissMessage(res));
     (err as any).semanticMiss = res;
+    (err as any).locationFailure = {
+      phase: "zeroMatch",
+      candidates: res.candidates.length,
+      dialogActive: false,
+      hasShadow: false,
+    };
+    // best-effort 补齐页面特征(失败路径多一次 evaluate 可接受,不放大错误)
+    try {
+      const ctx = await withTimeout(page.evaluate(failureContextProbe, undefined), 1_500, "失败特征探测");
+      if (ctx !== null && typeof ctx === "object") {
+        (err as any).locationFailure = { phase: "zeroMatch", candidates: res.candidates.length, ...(ctx as any) };
+      }
+    } catch {
+      /* keep defaults */
+    }
     throw err;
   }
 

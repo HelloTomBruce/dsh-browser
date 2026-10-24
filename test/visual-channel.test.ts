@@ -102,7 +102,8 @@ describe("ref 坐标兜底 (降级 3)", () => {
     };
     setPageRefs(page, new Map([["e1", { role: "button", name: "登录", selector: "#x" }]]));
     await expect(resolveTargetLocator(page, { ref: "e1" })).rejects.toThrow("ref e1 已失效");
-    expect(page.evaluate).not.toHaveBeenCalled();
+    // 唯一的 evaluate 是失败遥测探测(非坐标兜底/重锚定扫描)
+    expect(page.evaluate).toHaveBeenCalledTimes(1);
   });
 });
 
