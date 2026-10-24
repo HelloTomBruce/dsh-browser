@@ -153,8 +153,23 @@ async function main() {
       return "shadow 内输入框填入成功";
     });
 
+    // 测试 6: 点击效果验证(effect: true,characterData 变化摘要)
+    await runStep("6. [效果验证] effect 点击返回 DOM 动静摘要", async () => {
+      const clickRes = await fetchJson("/click", {
+        method: "POST",
+        body: JSON.stringify({ what: "Shadow 删除", effect: true }),
+      });
+      if (clickRes.effect?.domChanged !== true) {
+        throw new Error(`点击更新了状态文本但 effect 未捕获动静: ${JSON.stringify(clickRes.effect)}`);
+      }
+      if (!Array.isArray(clickRes.effect.mutations) || clickRes.effect.mutations.length === 0) {
+        throw new Error(`effect.mutations 为空: ${JSON.stringify(clickRes.effect)}`);
+      }
+      return `domChanged=true, mutations=${clickRes.effect.mutations.join(" | ")}`;
+    });
+
     console.log("\n======================================================================");
-    console.log("🎉 Shadow DOM 组合树穿透 5 项场景 100% 验证成功！");
+    console.log("🎉 Shadow DOM 组合树穿透 6 项场景 100% 验证成功！");
     console.log("======================================================================\n");
   } finally {
     try {

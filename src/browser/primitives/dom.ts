@@ -182,58 +182,100 @@ export function isMaskInterceptionError(error: Error): boolean {
 
 import { injectWalker } from "../walker.js";
 
-/** 页内变化收集(walker cssPath 单一来源;dedup + 截断)。 */
-const collectDigestInjector = injectWalker<
-  { windowMs: number; maxItems: number },
-  Promise<{ mutations: string[]; domChanged: boolean }>
->((payload, w) => {
-  return new Promise<{ mutations: string[]; domChanged: boolean }>((resolve) => {
-    const seen = new Set<string>();
-    const out: string[] = [];
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      observer.disconnect();
-      resolve({ mutations: out, domChanged: out.length > 0 });
-    };
-    const note = (el: Element | null, kind: string) => {
-      if (el === null || out.length >= payload.maxItems) return;
-      if (!(el instanceof Element)) return;
-      const sel = w.cssPath(el);
-      const key = `${kind}:${sel}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      out.push(`${kind} ${sel}`);
-    };
-    const observer = new MutationObserver((records) => {
-      for (const r of records) {
-        r.addedNodes.forEach((n) => note(n as Element | null, "+"));
-        r.removedNodes.forEach((n) => note(n as Element | null, "-"));
-        if (r.type === "attributes") note(r.target as Element, "~");
+/** 页内变化收集核心逻辑(begin 装表;walker cssPath 单一来源;dedup + 截断)。 */
+const beginWatchInjector = injectWalker<unknown, boolean>((_payload, w) => {
+  const w2 = window as unknown as Record<string, unknown>;
+  const prev = w2.__dshWatch as { observer?: MutationObserver } | undefined;
+  if (prev?.observer) {
+    try {
+      prev.observer.disconnect();
+    } catch {
+      /* ignore */
+    }
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const note = (node: Node | null, kind: string) => {
+    if (node === null || out.length >= 30) return;
+    // 文本/注释节点(childList 的 added/removed 或 characterData 的 target)
+    // 归属到其父元素 —— textContent 赋值是「替换文本节点」,不是 characterData
+    let el: Node = node;
+    if (el.nodeType === 3 || el.nodeType === 8) {
+      el = (el as CharacterData).parentElement ?? el;
+    }
+    if (el.nodeType !== 1) return;
+    const sel = w.cssPath(el as Element);
+    const key = `${kind}:${sel}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(`${kind} ${sel}`);
+  };
+  const observer = new MutationObserver((records) => {
+    for (const r of records) {
+      r.addedNodes.forEach((n) => note(n as Node | null, "+"));
+      r.removedNodes.forEach((n) => note(n as Node | null, "-"));
+      if (r.type === "attributes") note(r.target as Node, "~");
+      if (r.type === "characterData") {
+        const t = r.target as ChildNode | null;
+        note(t && t.parentElement ? t.parentElement : null, "~");
       }
-    });
-    observer.observe(document.body, { childList: true, subtree: true, attributes: true });
-    setTimeout(finish, payload.windowMs);
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true });
+  w2.__dshWatch = { observer, out };
+  return true;
+});
+
+/** 收口:graceMs 宽限(等异步涟漪)后断开观察器并返回变化摘要。 */
+const endWatchInjector = injectWalker<
+  { graceMs: number },
+  Promise<{ mutations: string[]; domChanged: boolean }>
+>((payload) => {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      const w2 = window as unknown as Record<string, unknown>;
+      const watch = w2.__dshWatch as { observer?: MutationObserver; out?: string[] } | undefined;
+      w2.__dshWatch = undefined;
+      let mutations: string[] = [];
+      if (watch?.observer) {
+        try {
+          watch.observer.disconnect();
+        } catch {
+          /* ignore */
+        }
+        mutations = (watch.out ?? []).slice(0, 30);
+      }
+      resolve({ mutations, domChanged: mutations.length > 0 });
+    }, payload.graceMs);
   });
 });
 
 /**
- * 短窗口变化摘要:监听 windowMs 内的 DOM 变化(新增/删除/属性),返回去重
- * 截断后的变化元素选择器列表。观察 body 一次挂载,MutationObserver 持续到
- * 窗口结束;页面不可达返回 {mutations: [], domChanged: false}(不放大错误)。
+ * 开始记录 DOM 变化(点击前调用):在页内装 MutationObserver,变化累积到
+ * window.__dshWatch。失败静默(endChangeWatch 会返回空摘要,不放大错误)。
  */
-export async function collectChangeDigest(
+export async function beginChangeWatch(page: Page): Promise<void> {
+  try {
+    await withTimeout(page.evaluate(beginWatchInjector, undefined), 1_500, "变化记录启动");
+  } catch {
+    /* 页面导航中:效果验证降级为空摘要 */
+  }
+}
+
+/**
+ * 收口变化记录(点击后调用):graceMs 宽限(默认 600ms,等异步涟漪)后断开
+ * 观察器,返回去重截断(≤30)的变化元素选择器列表。未曾 begin 时返回空摘要。
+ */
+export async function endChangeWatch(
   page: Page,
-  options: { windowMs?: number; maxItems?: number } = {},
+  options: { graceMs?: number } = {},
 ): Promise<{ mutations: string[]; domChanged: boolean }> {
-  const windowMs = Math.min(Math.max(options.windowMs ?? 600, 100), 3000);
-  const maxItems = Math.min(Math.max(options.maxItems ?? 10, 1), 30);
+  const graceMs = Math.min(Math.max(options.graceMs ?? 600, 100), 3000);
   try {
     const out = await withTimeout(
-      page.evaluate(collectDigestInjector, { windowMs, maxItems }),
-      windowMs + 2_000,
-      "变化摘要收集",
+      page.evaluate(endWatchInjector, { graceMs }),
+      graceMs + 2_000,
+      "变化摘要收口",
     );
     return out ?? { mutations: [], domChanged: false };
   } catch {

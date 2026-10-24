@@ -18,7 +18,7 @@ import {
   waitForDOMQuiescence,
   liftTargetIfHiddenInput,
   isMaskInterceptionError,
-  collectChangeDigest,
+  beginChangeWatch, endChangeWatch,
   executeUniversalSelect,
   fillEditorHelper,
   fillFormFieldHelper,
@@ -72,6 +72,16 @@ export async function clickTool(config: BrowserConfig, args: Record<string, any>
 
   // 1. 隐藏 input 点击目标提升 (Target Lifting)
   target = await liftTargetIfHiddenInput(target);
+
+  // 效果验证前置:变化记录必须在点击**之前**装表(同步 DOM 变化点击瞬间即发生)
+  const wantEffect = args.effect === true;
+  let urlBefore = "";
+  let effectStart = 0;
+  if (wantEffect) {
+    urlBefore = page.url();
+    effectStart = Date.now();
+    await beginChangeWatch(page);
+  }
 
   const isHuman =
     args.humanize === true ||
@@ -157,28 +167,27 @@ export async function clickTool(config: BrowserConfig, args: Record<string, any>
     waitForDOMQuiescence(page, { quietMs: 60 }),
   ]);
 
-  // 4. 点击效果验证(effect: true):短窗口收集「点出了什么动静」——DOM 变化
-  // 摘要 + URL 变化 + 该 profile 点击后新增的网络请求。语义多候选场景下首击
-  // 无动静自动换次候选再试一次(最多 1 次,标 switchedCandidate)。
-  if (args.effect === true) {
-    const clickAt = Date.now();
-    const urlBefore = page.url();
-    const digest = await collectChangeDigest(page, { windowMs: 600 });
+  // 4. 点击效果验证(effect: true):收口「点出了什么动静」——DOM 变化摘要
+  // (点击前已装表)+ URL 变化 + 该 profile 点击后新增的网络请求。语义多候选
+  // 场景下首击无动静自动换次候选再试一次(最多 1 次,标 switchedCandidate)。
+  if (wantEffect) {
+    const digest = await endChangeWatch(page, { graceMs: 600 });
     let switchedCandidate = false;
     let finalDigest = digest;
     if (!digest.domChanged && page.url() === urlBefore && (targetRes.alternates?.length ?? 0) > 0) {
       const alt = targetRes.alternates![0]!;
+      await beginChangeWatch(page);
       try {
         await alt.click({ timeout: 3000 });
         switchedCandidate = true;
-        finalDigest = await collectChangeDigest(page, { windowMs: 600 });
+        finalDigest = await endChangeWatch(page, { graceMs: 600 });
       } catch {
         /* 备选点击失败:维持首击结果,不放大 */
       }
     }
     const urlAfter = page.url();
     const newRequests = networkEntries(currentProfile)
-      .filter((n) => n.startedAt >= clickAt)
+      .filter((n) => n.startedAt >= effectStart)
       .slice(-10)
       .map((n) => ({ url: n.url, method: n.method, ...(n.status !== undefined ? { status: n.status } : {}) }));
     const effect = {

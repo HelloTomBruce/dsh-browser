@@ -36,20 +36,21 @@ vi.mock("../src/browser/session.js", async (importOriginal) => {
   return { ...actual, ...mockState };
 });
 
-import { collectChangeDigest } from "../src/browser/primitives/dom.js";
+import { beginChangeWatch, endChangeWatch } from "../src/browser/primitives/dom.js";
 import { clickTool } from "../src/browser/tools/interaction.js";
 import { sessionTracer } from "../src/browser/session/tracer.js";
 
-describe("collectChangeDigest 容错", () => {
+describe("begin/endChangeWatch 容错", () => {
   it("evaluate 失败返回空摘要(不放大错误)", async () => {
     const page: any = { evaluate: vi.fn().mockRejectedValue(new Error("nav")) };
-    const out = await collectChangeDigest(page as unknown as Page, { windowMs: 100 });
+    await beginChangeWatch(page as unknown as Page);
+    const out = await endChangeWatch(page as unknown as Page, { graceMs: 100 });
     expect(out).toEqual({ mutations: [], domChanged: false });
   });
 
-  it("窗口参数钳制(100ms..3000ms / 1..30 条)不抛错", async () => {
+  it("graceMs 钳制(100ms..3000ms)不抛错", async () => {
     const page: any = { evaluate: vi.fn().mockResolvedValue({ mutations: ["+ #a"], domChanged: true }) };
-    const out = await collectChangeDigest(page as unknown as Page, { windowMs: 99999, maxItems: 999 });
+    const out = await endChangeWatch(page as unknown as Page, { graceMs: 99999 });
     expect(out.domChanged).toBe(true);
   });
 });
