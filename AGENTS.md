@@ -4,9 +4,9 @@
 
 ## ⚠️ 强制约定:功能更新文档先行
 
-**任何功能更新,必须先更新 DocMind 产品文档(项目名 `dsh-browser`,本地路径 `/Users/zhangbei/code/prd/dsh-browser`),再动代码。**
+**任何功能更新,必须先更新 DocMind （通过 mcp） 产品文档(项目名 `dsh-browser`,再动代码。**
 
-- 变更类型 → 应更新的模块文档映射表、状态流转(in_progress → completed)与自检清单:见 `docs/产品文档维护约定.md`
+- 变更类型 → 应更新的模块文档映射表、状态流转(in_progress → completed)
 - 快速映射:新工具/参数 → 04 工具全景;定位引擎 → 03;UI 原语 → 11;快照 → 12;抽取 → 13;协作/面板 → 05/07;回归 → 06;安全 → 08;**新配置键 → 09(必同步)**;版本发布 → 10 + 根文档版本号;新限制/踩坑 → 15;新用法 → 14
 - 版本号三处对齐:`package.json` / DocMind 根文档 / 10 版本演进
 
@@ -26,13 +26,13 @@ HEADLESS=true pnpm test:pick         # 面板点选 4 项(生产面板 API + 真
 
 ## 不可破坏的契约(改到这里先读对应测试)
 
-| 契约 | 把关测试 | 说明 |
-| --- | --- | --- |
-| 工具返回值过 outputSchema | `test/output-contract.test.ts` | 宿主严格校验,未声明字段会导致真实会话报错——**改返回值必须先扩 schema** |
-| 工具数硬编码 | `test/toolset.test.ts` | all=38 / core=25;增删工具、调整 core 集必须同步计数 |
-| 配置键三处同步 | `test/config.test.ts` | `src/index.ts` SCHEMA + DEFAULT_CONFIG、`src/browser/types.ts`、README 配置块、DocMind 09 |
-| 页内注入单一来源 | — | `src/browser/walker.ts` 是页内逻辑唯一来源;语义扫描唯一实现在 `src/browser/session/semantic.ts`(find 与 what 共用),不得再造副本 |
-| 执行器单一源 | — | `register.ts` 的 stepImpls 是 live/replay/batch/面板重跑共用实现;审批闸在包装层,不得绕过 |
+| 契约                      | 把关测试                       | 说明                                                                                                                            |
+| ------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| 工具返回值过 outputSchema | `test/output-contract.test.ts` | 宿主严格校验,未声明字段会导致真实会话报错——**改返回值必须先扩 schema**                                                          |
+| 工具数硬编码              | `test/toolset.test.ts`         | all=38 / core=25;增删工具、调整 core 集必须同步计数                                                                             |
+| 配置键三处同步            | `test/config.test.ts`          | `src/index.ts` SCHEMA + DEFAULT_CONFIG、`src/browser/types.ts`、README 配置块、DocMind 09                                       |
+| 页内注入单一来源          | —                              | `src/browser/walker.ts` 是页内逻辑唯一来源;语义扫描唯一实现在 `src/browser/session/semantic.ts`(find 与 what 共用),不得再造副本 |
+| 执行器单一源              | —                              | `register.ts` 的 stepImpls 是 live/replay/batch/面板重跑共用实现;审批闸在包装层,不得绕过                                        |
 
 ## 架构速览
 
@@ -48,3 +48,6 @@ HEADLESS=true pnpm test:pick         # 面板点选 4 项(生产面板 API + 真
 - `vi.mock` 提升后同文件只有一个 factory 生效——多用 `vi.hoisted` 共享状态(见 `test/effect-verify.test.ts`)
 - 页内注入逻辑(walker/扫描/坐标探测)无法 node 单测,走 playground e2e;**测平台机制用裸静态页**(`playground/shadow-dom.html`,无框架噪音、不依赖构建新鲜度),测组件库适配才用 Vue 页面
 - `evalTool` 多行脚本必须自带 `return`
+
+## 禁止
+- 没有用户明确要求，不得提交代码
