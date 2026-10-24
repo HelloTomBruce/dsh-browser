@@ -34,12 +34,14 @@ function fakePage(evaluateImpl?: (fn: any, arg: any) => any): Page {
 }
 
 describe("pickToolOnPage", () => {
-  it("用户点选命中:按 deviceWidth/imgW 换算坐标并返回描述 + ref", async () => {
-    // 模拟推流帧 metadata:deviceWidth 1280(CSS),截图 640px 宽 → 放大 2 倍
+  it("用户点选命中:以 viewportSize 为基准换算(CDP deviceWidth 降采样撒谎也不受影响)", async () => {
+    // 回归 DSH 实测 bug:视口 1280 CSS,CDP 推流帧被降采样到 640×360,metadata
+    // deviceWidth 报的是捕获尺寸 640 —— 若误用它做基准,坐标恰好小一半。
+    // 面板上报:位图 imgW=640(降采样帧)上的 x=608;真实 CSS 中心应为 1216。
     vi.spyOn(screencastManager, "getLastFrame").mockReturnValue({
       buffer: Buffer.alloc(0),
       base64: "",
-      metadata: { deviceWidth: 1280, deviceHeight: 800 },
+      metadata: { deviceWidth: 640, deviceHeight: 360, pageScaleFactor: 1 },
       timestamp: 1,
     } as any);
     let evaluateArg: any = null;
@@ -52,13 +54,15 @@ describe("pickToolOnPage", () => {
     });
     // 起一个后台定时器模拟用户在 600ms 后点选
     setTimeout(() => {
-      resolvePick((getPendingPick() as any).id, { x: 320, y: 200, imgW: 640, imgH: 400 });
+      resolvePick((getPendingPick() as any).id, { x: 608, y: 49, imgW: 640, imgH: 360 });
     }, 600);
     const res: any = await pickToolOnPage(page, {} as any, { timeoutMs: 5000 });
     expect(res.picked).toBe(true);
     expect(res.status).toBe("picked");
-    // 换算:320 * 1280 / 640 = 640;200 * 800 / 400 = 400
-    expect(evaluateArg).toEqual({ x: 640, y: 400 });
+    // 换算必须用 viewport(fakePage 的 viewportSize 是 1280×800):
+    // x = 608 * 1280 / 640 = 1216(旧代码会算成 608 * 640 / 640 = 608,恰好小一半)
+    // y = 49 * 800 / 360 ≈ 109(fakePage 无元素命中逻辑,只验证坐标)
+    expect((evaluateArg as any).x).toBe(1216);
     expect(res.selector).toBe("#login");
     expect(res.role).toBe("button");
     expect(res.name).toBe("登录");

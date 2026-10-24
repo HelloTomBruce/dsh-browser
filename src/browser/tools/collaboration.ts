@@ -279,7 +279,7 @@ const describePoint = injectWalker<
 /**
  * 面板点选教学工具:等待用户在实时画面大图上点选目标元素,返回其统一描述、
  * 稳定 selector、选择器指纹(与录制自愈 healCandidates 兼容)与可直接使用
- * 的 ref。坐标换算:cssX = imgPx * deviceWidth / imgW(elementFromPoint 收
+ * 的 ref。坐标换算:cssX = imgPx * viewportWidth / imgW / pageScaleFactor(elementFromPoint 收
  * 视口相对坐标,无需 scroll 换算)。
  * 导出 pickToolOnPage 供测试注入 fake page。
  */
@@ -302,8 +302,14 @@ export async function pickToolOnPage(
       return undefined;
     }
   })();
-  const deviceWidth = Number(meta?.deviceWidth) || viewport?.width || 0;
-  const deviceHeight = Number(meta?.deviceHeight) || viewport?.height || 0;
+  // CSS 坐标基准必须是 viewportSize(Playwright ground truth)。CDP metadata 的
+  // deviceWidth/deviceHeight 是「捕获/缩放尺寸」——Chrome 对推流帧降采样时
+  // 它等于帧尺寸而非视口(DSH 实测 1280 CSS 视口配 640×360 帧,导致换算
+  // 恰好小一半),不能作基准;metadata 只取 pageScaleFactor(pinch 缩放修正),
+  // viewportSize 不可得时才兜底用 metadata dims。
+  const psf = Number(meta?.pageScaleFactor) > 0 ? Number(meta?.pageScaleFactor) : 1;
+  const deviceWidth = viewport?.width ?? (Number(meta?.deviceWidth) || 0);
+  const deviceHeight = viewport?.height ?? (Number(meta?.deviceHeight) || 0);
   setPendingPick({
     id,
     instruction,
@@ -340,8 +346,8 @@ export async function pickToolOnPage(
   if (deviceWidth <= 0 || deviceHeight <= 0 || pick.imgW <= 0 || pick.imgH <= 0) {
     return { picked: false, status: "missed", instruction, detail: "缺少推流帧尺寸元数据,无法换算坐标(请确认实时画面已启动)", waitedMs };
   }
-  const cssX = Math.round((pick.x * deviceWidth) / pick.imgW);
-  const cssY = Math.round((pick.y * deviceHeight) / pick.imgH);
+  const cssX = Math.round((pick.x * deviceWidth) / pick.imgW / psf);
+  const cssY = Math.round((pick.y * deviceHeight) / pick.imgH / psf);
   let desc: ReturnType<typeof describePoint> = null;
   try {
     desc = await page.evaluate(describePoint, { x: cssX, y: cssY });
@@ -387,6 +393,12 @@ export async function pickToolOnPage(
     },
     x: cssX,
     y: cssY,
+    map: {
+      viewport: { w: deviceWidth, h: deviceHeight },
+      img: { w: pick.imgW, h: pick.imgH },
+      ...(meta?.deviceWidth !== undefined ? { cdpFrame: { w: Number(meta.deviceWidth) || 0, h: Number(meta.deviceHeight) || 0 } } : {}),
+      pageScaleFactor: psf,
+    },
     ...(await pageIdentity(page)),
   };
 }

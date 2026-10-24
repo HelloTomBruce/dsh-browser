@@ -137,6 +137,7 @@ export function getCollaborationTools(
           hint: { type: "object" },
           x: { type: "integer" },
           y: { type: "integer" },
+          map: { type: "object", description: "坐标换算诊断:viewport(基准)/img(面板上报位图)/cdpFrame(捕获帧 dims,可能小于 viewport)/pageScaleFactor。" },
           url: { type: "string" },
           title: { type: "string" },
         },
