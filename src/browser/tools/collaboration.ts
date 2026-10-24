@@ -5,7 +5,10 @@ import {
   getPage, activePage, pageIdentity, pageRef,
   setPauseInstruction, clearPauseInstruction,
   setPendingConfirm, getPendingConfirm, clearPendingConfirm,
+  setPendingPick, getPendingPick, clearPendingPick,
+  pageRefsOf, setPageRefs, assignRefs,
 } from "../session.js";
+import { screencastManager } from "../session/screencast.js";
 import { injectWalker } from "../walker.js";
 import { checkOnce, pollCondition, type TestCondition } from "./testing.js";
 
@@ -226,6 +229,163 @@ export async function confirmTool(config: BrowserConfig, args: Record<string, an
     throw new Error(`敏感操作被拒绝: ${reason} — ${detail}`);
   }
   return { decision, id, reason, waitedMs: Date.now() - startedAt, detail };
+}
+
+// ---------------------------------------------------------------------------
+// 面板点选教学(browser_pick_element):agent 一句话说不清的疑难元素(画布/
+// 哈希类名/深层 shadow DOM),让用户在实时画面大图上直接点一下。工具挂起等
+// 待(面板轮询 GET /pick 显示十字光标),用户点击后前端把截图位图坐标 POST
+// 回来,服务端按 CDP metadata 换算成视口 CSS 坐标 → elementFromPoint →
+// walker describeElement 出统一描述与稳定 selector,并注册成正式 ref。
+// 超时不抛错(pause 语义),返回 picked:false 由 agent 决定下一步。
+// ---------------------------------------------------------------------------
+
+/** 面板点选坐标 → 页面元素统一描述(walker 单一来源;elementFromPoint 向上爬到可交互元素)。 */
+const describePoint = injectWalker<
+  { x: number; y: number },
+  | {
+      role: string;
+      name: string;
+      selector: string;
+      testid: string;
+      id: string;
+      tag: string;
+      text: string;
+      visible: boolean;
+    }
+  | null
+>((payload, w) => {
+  let el: Element | null = document.elementFromPoint(payload.x, payload.y);
+  let hops = 0;
+  while (el !== null && hops < 6) {
+    const d = w.describeElement(el);
+    if (w.INTERACTIVE.has(d.role)) return d;
+    el = el.parentElement;
+    hops += 1;
+  }
+  // 没爬到可交互元素(点在空白/纯展示区域):按未命中处理
+  return null;
+});
+
+/**
+ * 面板点选教学工具:等待用户在实时画面大图上点选目标元素,返回其统一描述、
+ * 稳定 selector、选择器指纹(与录制自愈 healCandidates 兼容)与可直接使用
+ * 的 ref。坐标换算:cssX = imgPx * deviceWidth / imgW(elementFromPoint 收
+ * 视口相对坐标,无需 scroll 换算)。
+ * 导出 pickToolOnPage 供测试注入 fake page。
+ */
+export async function pickToolOnPage(
+  page: Page,
+  config: BrowserConfig,
+  args: Record<string, any>,
+): Promise<Record<string, any>> {
+  const instruction =
+    typeof args.instruction === "string" && args.instruction.trim() !== ""
+      ? args.instruction.trim()
+      : "请在实时画面大图上点击要教学的目标元素";
+  const timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? 300_000) || 300_000, 1_000), 600_000);
+  const id = `pick-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const meta = screencastManager.getLastFrame()?.metadata ?? undefined;
+  const viewport = (() => {
+    try {
+      return page.viewportSize() ?? undefined;
+    } catch {
+      return undefined;
+    }
+  })();
+  const deviceWidth = Number(meta?.deviceWidth) || viewport?.width || 0;
+  const deviceHeight = Number(meta?.deviceHeight) || viewport?.height || 0;
+  setPendingPick({
+    id,
+    instruction,
+    startedAt: Date.now(),
+    ...(deviceWidth > 0 ? { deviceWidth } : {}),
+    ...(deviceHeight > 0 ? { deviceHeight } : {}),
+  });
+  const startedAt = Date.now();
+  let pick: { x: number; y: number; imgW: number; imgH: number } | undefined;
+  let detail = `等待点选超时(${timeoutMs}ms)`;
+  try {
+    const deadline = startedAt + timeoutMs;
+    while (Date.now() < deadline) {
+      await sleep(500);
+      const pending = getPendingPick();
+      if (pending === null || pending.id !== id) {
+        detail = "点选请求已被新请求取代";
+        break;
+      }
+      if (pending.pick !== undefined) {
+        pick = pending.pick;
+        detail = "用户已点选";
+        break;
+      }
+    }
+  } finally {
+    const pending = getPendingPick();
+    if (pending !== null && pending.id === id) clearPendingPick();
+  }
+  const waitedMs = Date.now() - startedAt;
+  if (pick === undefined) {
+    return { picked: false, status: "timedOut", instruction, detail, waitedMs };
+  }
+  if (deviceWidth <= 0 || deviceHeight <= 0 || pick.imgW <= 0 || pick.imgH <= 0) {
+    return { picked: false, status: "missed", instruction, detail: "缺少推流帧尺寸元数据,无法换算坐标(请确认实时画面已启动)", waitedMs };
+  }
+  const cssX = Math.round((pick.x * deviceWidth) / pick.imgW);
+  const cssY = Math.round((pick.y * deviceHeight) / pick.imgH);
+  let desc: ReturnType<typeof describePoint> = null;
+  try {
+    desc = await page.evaluate(describePoint, { x: cssX, y: cssY });
+  } catch {
+    desc = null;
+  }
+  if (desc === null || desc.selector === "") {
+    return {
+      picked: false,
+      status: "missed",
+      instruction,
+      detail: `坐标 (${cssX}, ${cssY}) 处未命中可交互元素(可能点在空白区域或纯展示元素上)`,
+      waitedMs,
+    };
+  }
+  // 注册成正式 ref:agent 拿到结果可直接 browser_click { ref }
+  const { withRefs, merged } = assignRefs(pageRefsOf(page), [
+    { role: desc.role, name: desc.name, selector: desc.selector, ancestors: [] },
+  ], 500);
+  setPageRefs(page, merged);
+  const ref = withRefs[0]?.ref;
+  return {
+    picked: true,
+    status: "picked",
+    instruction,
+    detail,
+    waitedMs,
+    ...(ref !== undefined ? { ref } : {}),
+    selector: desc.selector,
+    role: desc.role,
+    name: desc.name,
+    tag: desc.tag,
+    ...(desc.testid !== "" ? { testid: desc.testid } : {}),
+    ...(desc.id !== "" ? { elementId: desc.id } : {}),
+    ...(desc.text !== "" ? { text: desc.text } : {}),
+    hint: {
+      ...(desc.testid !== "" ? { testid: desc.testid } : {}),
+      ...(desc.role !== "" ? { role: desc.role } : {}),
+      ...(desc.name !== "" ? { name: desc.name } : {}),
+      ...(desc.id !== "" ? { id: desc.id } : {}),
+      ...(desc.text !== "" ? { text: desc.text } : {}),
+      tag: desc.tag,
+    },
+    x: cssX,
+    y: cssY,
+    ...(await pageIdentity(page)),
+  };
+}
+
+/** 面板点选教学工具入口。 */
+export async function pickTool(config: BrowserConfig, args: Record<string, any>) {
+  const page = await getPage(config);
+  return pickToolOnPage(page, config, args);
 }
 
 // ---------------------------------------------------------------------------

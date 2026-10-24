@@ -1,6 +1,6 @@
 // dsh-browser · 客户端组件 — 实时画面全屏模态框与访问历史
 import { createElement, useEffect, type MouseEvent } from "react";
-import type { NavHistoryItem, Palette, BrowserStatus } from "../types.js";
+import type { NavHistoryItem, Palette, BrowserStatus, PendingPick } from "../types.js";
 import { fmtTime } from "../theme.js";
 
 interface InspectionModalProps {
@@ -11,6 +11,10 @@ interface InspectionModalProps {
   dark: boolean;
   palette: Palette;
   onClose: () => void;
+  /** 面板点选教学:等待中非空,大图切换为十字光标点选模式。 */
+  pendingPick?: PendingPick | null;
+  /** 用户点选回调(x/y 为截图位图像素坐标,imgW/imgH 为截图尺寸)。 */
+  onPick?: (x: number, y: number, imgW: number, imgH: number) => void;
 }
 
 export function InspectionModal({
@@ -21,6 +25,8 @@ export function InspectionModal({
   dark,
   palette: p,
   onClose,
+  pendingPick,
+  onPick,
 }: InspectionModalProps) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -29,6 +35,24 @@ export function InspectionModal({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  /** objectFit: contain 的 letterbox 几何:显示盒坐标 → 位图像素坐标。 */
+  const handleImageClick = (e: MouseEvent<HTMLImageElement>) => {
+    if (pendingPick === null || pendingPick === undefined || onPick === undefined) return;
+    const img = e.currentTarget;
+    const rect = img.getBoundingClientRect();
+    const nw = img.naturalWidth || rect.width;
+    const nh = img.naturalHeight || rect.height;
+    if (nw <= 0 || nh <= 0) return;
+    const scale = Math.min(rect.width / nw, rect.height / nh);
+    const ox = (rect.width - nw * scale) / 2;
+    const oy = (rect.height - nh * scale) / 2;
+    const px = Math.min(Math.max((e.clientX - rect.left - ox) / scale, 0), nw);
+    const py = Math.min(Math.max((e.clientY - rect.top - oy) / scale, 0), nh);
+    onPick(Math.round(px), Math.round(py), Math.round(nw), Math.round(nh));
+  };
+
+  const picking = pendingPick !== null && pendingPick !== undefined;
 
   return createElement(
     "div",
@@ -106,6 +130,32 @@ export function InspectionModal({
           "✕",
         ),
       ),
+      // Pick-teaching banner (browser_pick_element 等待中)
+      picking
+        ? createElement(
+            "div",
+            {
+              style: {
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                padding: "6px 10px",
+                borderRadius: "8px",
+                border: "1px dashed #f59e0b",
+                background: dark ? "rgba(245, 158, 11, 0.12)" : "rgba(245, 158, 11, 0.08)",
+                color: dark ? "#fbbf24" : "#b45309",
+                fontSize: "12px",
+                lineHeight: "1.5",
+              },
+            },
+            createElement("span", { style: { flex: "none" } }, "🎯"),
+            createElement(
+              "span",
+              { style: { flex: 1, minWidth: 0, wordBreak: "break-all" } },
+              `等待点选教学: ${pendingPick.instruction}(在下方画面上点击目标元素)`,
+            ),
+          )
+        : null,
       // Large Live Stream / Screenshot
       status?.open
         ? createElement("img", {
@@ -116,13 +166,15 @@ export function InspectionModal({
               }
             },
             alt: "浏览器大图",
+            ...(picking ? { onClick: handleImageClick } : {}),
             style: {
               width: "100%",
               maxHeight: "55vh",
               objectFit: "contain",
               borderRadius: "8px",
-              border: `1px solid ${p.border}`,
+              border: picking ? "2px dashed #f59e0b" : `1px solid ${p.border}`,
               background: dark ? "#10141c" : "#f8fafc",
+              cursor: picking ? "crosshair" : "default",
             },
           })
         : createElement(

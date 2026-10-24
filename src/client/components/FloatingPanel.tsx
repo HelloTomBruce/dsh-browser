@@ -1,6 +1,6 @@
 // dsh-browser · 客户端组件 — 实时画面悬浮面板
 import { createElement, type MouseEvent } from "react";
-import type { BrowserOp, BrowserStatus, LatestRun, Palette, PendingConfirm } from "../types.js";
+import type { BrowserOp, BrowserStatus, LatestRun, Palette, PendingConfirm, PendingPick } from "../types.js";
 import { fmtTime } from "../theme.js";
 import { ConfirmCard } from "./ConfirmCard.js";
 
@@ -11,6 +11,7 @@ interface FloatingPanelProps {
   agentBusy: boolean;
   rerunMsg: string;
   pendingConfirm: PendingConfirm | null;
+  pendingPick?: PendingPick | null;
   shotSrc: string;
   streamSrc?: string;
   dark: boolean;
@@ -28,6 +29,7 @@ export function FloatingPanel({
   agentBusy,
   rerunMsg,
   pendingConfirm,
+  pendingPick,
   shotSrc,
   streamSrc,
   dark,
@@ -139,6 +141,35 @@ export function FloatingPanel({
             "span",
             { style: { flex: 1, minWidth: 0, wordBreak: "break-all" } },
             `等待人工操作: ${status.pause.instruction}`,
+          ),
+        )
+      : null,
+    // Pick-Teaching Banner (browser_pick_element 等待中,点击缩略图放大去点选)
+    pendingPick
+      ? createElement(
+          "div",
+          {
+            style: {
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              padding: "6px 8px",
+              borderRadius: "8px",
+              border: "1px dashed #f59e0b",
+              background: dark ? "rgba(245, 158, 11, 0.12)" : "rgba(245, 158, 11, 0.08)",
+              color: dark ? "#fbbf24" : "#b45309",
+              fontSize: "12px",
+              lineHeight: "1.5",
+              cursor: "pointer",
+            },
+            title: "点击放大实时画面,在画面上点选目标元素",
+            onClick: onOpenModal,
+          },
+          createElement("span", { style: { flex: "none" } }, "🎯"),
+          createElement(
+            "span",
+            { style: { flex: 1, minWidth: 0, wordBreak: "break-all" } },
+            `等待点选教学: ${pendingPick.instruction}(点此放大画面)`,
           ),
         )
       : null,

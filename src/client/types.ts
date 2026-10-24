@@ -53,6 +53,13 @@ export interface PendingConfirm {
   decision?: "allowed" | "denied";
 }
 
+/** 面板点选教学请求(browser_pick_element 等待期间轮询到)。 */
+export interface PendingPick {
+  id: string;
+  instruction: string;
+  startedAt: number;
+}
+
 export interface LatestRun {
   runId: string;
   ts: number;

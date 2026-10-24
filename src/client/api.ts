@@ -1,7 +1,7 @@
 // dsh-browser · 客户端 — HTTP API 接口封装
 import type {
   BrowserOp, BrowserStatus, LatestRun,
-  NavHistoryItem, PendingConfirm, RecordingDetail, RecordingRow,
+  NavHistoryItem, PendingConfirm, PendingPick, RecordingDetail, RecordingRow,
 } from "./types.js";
 
 let cachedBasePath: string | null = null;
@@ -92,6 +92,38 @@ export async function submitConfirmDecision(
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ id, decision }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function fetchPendingPick(base: string): Promise<PendingPick | null> {
+  try {
+    const res = await fetch(`${base}/pick`, { cache: "no-store" });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.pick ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 提交点选坐标(x/y 为截图位图像素坐标,imgW/imgH 为截图尺寸;服务端换算成视口 CSS 坐标)。 */
+export async function submitPick(
+  base: string,
+  id: string,
+  x: number,
+  y: number,
+  imgW: number,
+  imgH: number,
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${base}/pick`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, x, y, imgW, imgH }),
     });
     return res.ok;
   } catch {

@@ -49,6 +49,48 @@ export function resolveConfirm(id: string, decision: "allowed" | "denied"): bool
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// 面板点选教学(browser_pick_element):agent 挂起等待,用户在实时画面大图上
+// 点击目标元素,面板把「截图位图像素坐标 + 图片尺寸」POST 回来,Node 侧按
+// CDP metadata(deviceWidth/Height)换算成页面视口 CSS 坐标后 elementFromPoint。
+// ---------------------------------------------------------------------------
+
+/** 一次待点选的教学请求(browser_pick_element 等待期间供面板展示与提交)。 */
+export interface PendingPick {
+  id: string;
+  instruction: string;
+  startedAt: number;
+  /** 建立等待时快照的推流帧视口 CSS 尺寸(CDP metadata);坐标换算基准。 */
+  deviceWidth?: number;
+  deviceHeight?: number;
+  /** 面板提交的点选结果(截图位图像素坐标 + 截图尺寸)。 */
+  pick?: { x: number; y: number; imgW: number; imgH: number };
+}
+
+let pendingPick: PendingPick | null = null;
+
+export function setPendingPick(entry: PendingPick): void {
+  pendingPick = entry;
+}
+
+export function getPendingPick(): PendingPick | null {
+  return pendingPick;
+}
+
+export function clearPendingPick(): void {
+  pendingPick = null;
+}
+
+/** 面板提交点选坐标;id 不匹配(已被新请求取代/超时清理)时返回 false。 */
+export function resolvePick(
+  id: string,
+  pick: { x: number; y: number; imgW: number; imgH: number },
+): boolean {
+  if (pendingPick === null || pendingPick.id !== id) return false;
+  pendingPick.pick = pick;
+  return true;
+}
+
 // F2 面板一键重跑的忙碌判定:agent 会话有 live 浏览器工具调用在途时,
 // POST /runs/rerun 回 409(面板据此置灰重跑按钮)。
 let toolInFlight = 0;

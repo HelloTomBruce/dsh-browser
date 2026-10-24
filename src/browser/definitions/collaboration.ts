@@ -2,7 +2,7 @@
 import type { PlainToolDefinition } from "../../lib/types.js";
 import type { BrowserConfig } from "../types.js";
 import { definePlainTool, genericCard } from "../../lib/tools.js";
-import { waitForLoginTool, pauseForHumanTool, confirmTool } from "../tools.js";
+import { waitForLoginTool, pauseForHumanTool, confirmTool, pickTool } from "../tools.js";
 
 export function getCollaborationTools(
   config: BrowserConfig,
@@ -104,6 +104,50 @@ export function getCollaborationTools(
       render: (_args, value) => `用户允许执行(${value.waitedMs}ms): ${value.reason}`,
       timeoutMs: timeout(600_000),
       execute: (args) => confirmTool(config, args),
-    })
+    }),
+    definePlainTool({
+      name: "browser_pick_element",
+      description:
+        "面板点选教学:一句话说不清/定位反复失败的疑难元素(画布、CSS-in-JS 哈希类名、深层 Shadow DOM),调用本工具后实时画面面板大图会显示十字光标,等用户在画面上点一下目标元素,即返回该元素的稳定 selector、选择器指纹(可进录制自愈)与可直接使用的 ref。超时不抛错,返回 picked:false。适合定位失败 2 次后改走人工指路,比继续猜选择器更高效。",
+      parameters: {
+        type: "object",
+        properties: {
+          instruction: { type: "string", description: "给用户看的提示语,默认「请在实时画面大图上点击要教学的目标元素」。" },
+          timeoutMs: { type: "integer", description: "等待点选上限(毫秒,默认 300000,下限 1000,上限 600000)。" },
+        },
+        additionalProperties: false,
+      },
+      outputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          picked: { type: "boolean" },
+          status: { type: "string", enum: ["picked", "timedOut", "missed"] },
+          instruction: { type: "string" },
+          detail: { type: "string" },
+          waitedMs: { type: "integer" },
+          ref: { type: "string" },
+          selector: { type: "string" },
+          role: { type: "string" },
+          name: { type: "string" },
+          tag: { type: "string" },
+          testid: { type: "string" },
+          elementId: { type: "string" },
+          text: { type: "string" },
+          hint: { type: "object" },
+          x: { type: "integer" },
+          y: { type: "integer" },
+          url: { type: "string" },
+          title: { type: "string" },
+        },
+        required: ["picked", "status", "instruction", "detail", "waitedMs"],
+      },
+      render: (_args, value) =>
+        value.picked
+          ? `用户点选: ${value.role} "${value.name}" → ${value.selector}${value.ref ? ` [ref=${value.ref}]` : ""}`
+          : `未完成点选(${value.status}): ${value.detail}`,
+      timeoutMs: timeout(600_000),
+      execute: (args) => pickTool(config, args),
+    }),
   ];
 }

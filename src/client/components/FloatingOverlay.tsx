@@ -1,8 +1,9 @@
 // dsh-browser · 客户端组件 — 悬浮总控组件 (FAB + Panel + Modals)
 import { createElement, useEffect, useState } from "react";
-import { fetchHistory, getBasePath } from "../api.js";
+import { fetchHistory, getBasePath, submitPick } from "../api.js";
 import { useBrowserStatus } from "../hooks/useBrowserStatus.js";
 import { useConfirmPolling } from "../hooks/useConfirmPolling.js";
+import { usePickPolling } from "../hooks/usePickPolling.js";
 import { DARK, LIGHT, useDarkTheme } from "../theme.js";
 import type { NavHistoryItem } from "../types.js";
 import { FloatingPanel } from "./FloatingPanel.js";
@@ -30,6 +31,7 @@ export function BrowserFloatingOverlay() {
 
   const { status, ops, shotVersion, lastRun, agentBusy, rerunMsg, rerunLast } = useBrowserStatus(base);
   const { pendingConfirm, resolveConfirm } = useConfirmPolling(base);
+  const { pendingPick } = usePickPolling(base);
 
   // Poll navigation history when modal is open
   useEffect(() => {
@@ -99,6 +101,7 @@ export function BrowserFloatingOverlay() {
         agentBusy,
         rerunMsg,
         pendingConfirm,
+        pendingPick,
         shotSrc,
         streamSrc,
         dark,
@@ -120,6 +123,10 @@ export function BrowserFloatingOverlay() {
         dark,
         palette: p,
         onClose: () => setModalOpen(false),
+        pendingPick,
+        onPick: (x, y, imgW, imgH) => {
+          if (pendingPick) void submitPick(base, pendingPick.id, x, y, imgW, imgH);
+        },
       }),
     // Regression Report Modal
     reportOpen &&

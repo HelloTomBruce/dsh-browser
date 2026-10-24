@@ -6,7 +6,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ReefContext, WebRoute } from "../lib/types.js";
 import type { BrowserConfig } from "./types.js";
-import { activePage, historyOf, currentProfile, testLogOf, currentPause, getPendingConfirm, resolveConfirm, activeToolCalls } from "./session.js";
+import { activePage, historyOf, currentProfile, testLogOf, currentPause, getPendingConfirm, resolveConfirm, getPendingPick, resolvePick, activeToolCalls } from "./session.js";
 import { screencastManager } from "./session/screencast.js";
 import { sessionTracer } from "./session/tracer.js";
 import { statusTool, runPanelRerun, getRerunHandler, rerunBusy } from "./tools.js";
@@ -176,6 +176,31 @@ export function registerBrowserApi(ctx: ReefContext, config: BrowserConfig, base
           }
           // 当前待审批请求(等待期间面板展示允许/拒绝按钮)。
           sendJson(res, 200, { confirm: getPendingConfirm() });
+          return;
+        }
+        if (path === `${base}/pick`) {
+          if ((req.method ?? "GET") === "POST") {
+            // 提交点选坐标:body { id, x, y, imgW, imgH }(截图位图像素坐标 + 截图尺寸)
+            const body = (await readJsonBody(req).catch(() => undefined)) as
+              | { id?: unknown; x?: unknown; y?: unknown; imgW?: unknown; imgH?: unknown }
+              | undefined;
+            const id = typeof body?.id === "string" ? body.id : "";
+            const nums = [body?.x, body?.y, body?.imgW, body?.imgH].map(Number);
+            if (!id || nums.some((n) => !Number.isFinite(n))) {
+              sendText(res, 400, "id, x, y, imgW, imgH (numbers) required");
+              return;
+            }
+            const [x, y, imgW, imgH] = nums;
+            if (imgW <= 0 || imgH <= 0) {
+              sendText(res, 400, "imgW/imgH must be positive");
+              return;
+            }
+            const accepted = resolvePick(id, { x, y, imgW, imgH });
+            sendJson(res, accepted ? 200 : 409, { accepted, id });
+            return;
+          }
+          // 当前待点选请求(等待期间面板大图显示十字光标)。
+          sendJson(res, 200, { pick: getPendingPick() });
           return;
         }
         if (path === `${base}/stream`) {
