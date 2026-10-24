@@ -8,6 +8,123 @@ import type { MarkEntry, RefEntry } from "../types.js";
 
 const refRegistry = new WeakMap<Page, Map<string, RefEntry>>();
 
+// ---------------------------------------------------------------------------
+// SPA 软失效导航代际(navSeq):主 frame 导航不再清空 ref 表,而是推进代际计数;
+// entry.navSeq 落后于当前代际 = 疑似过期(SPA 路由切换 DOM 大部分未变),
+// 定位失败时按指纹(role+name)重锚定而非直接判死。refReanchor: false 回退
+// 「导航即清空」的旧行为。
+// ---------------------------------------------------------------------------
+
+const navSeqs = new WeakMap<Page, number>();
+
+/** 页面当前导航代际(0 = 尚未导航/未标记)。 */
+export function pageNavSeq(page: Page): number {
+  return navSeqs.get(page) ?? 0;
+}
+
+/** 推进导航代际并返回新值;旧代际的 ref 全部标记为疑似过期。 */
+export function bumpPageNav(page: Page): number {
+  const next = pageNavSeq(page) + 1;
+  navSeqs.set(page, next);
+  return next;
+}
+
+/** 记录一次「本代际已尝试过重锚定」(避免同代际反复全页扫描)。 */
+const reanchorAttempts = new WeakMap<Page, number>();
+
+export function noteReanchorAttempt(page: Page): void {
+  reanchorAttempts.set(page, pageNavSeq(page));
+}
+
+/** 当前代际是否已尝试过重锚定。 */
+export function reanchorAttempted(page: Page): boolean {
+  return reanchorAttempts.get(page) === pageNavSeq(page);
+}
+
+/**
+ * 重锚定纯逻辑:按指纹把旧 ref 表映射到导航后的新扫描结果上。
+ * 匹配规则:role 相等 && 去-空白 name 相等(其次同 role 内 LCS ≥ 0.6 的名称
+ * 漂移);同指纹多命中按组内注册顺序 zip(稳定)。命中的 ref **沿用原编号**,
+ * 更新 selector/rect/scroll/navSeq;未命中的删除。
+ * 导出供测试。
+ */
+export function remapRefs(
+  oldRefs: Map<string, RefEntry>,
+  fresh: { role: string; name: string; selector: string; rect?: { x: number; y: number; w: number; h: number }; scroll?: { x: number; y: number } }[],
+  seq: number,
+): { merged: Map<string, RefEntry>; remapped: number; dropped: number; drifted: number } {
+  const clean = (s: string) => s.replace(/[\s\u00a0]+/g, "").toLowerCase();
+  const freshByRole = new Map<string, typeof fresh>();
+  for (const f of fresh) {
+    const list = freshByRole.get(f.role) ?? [];
+    list.push(f);
+    freshByRole.set(f.role, list);
+  }
+  const merged = new Map<string, RefEntry>();
+  let remapped = 0;
+  let dropped = 0;
+  let drifted = 0;
+  // 每 role 组内的消费游标:同指纹多命中按出现顺序一一对应
+  const cursorByRole = new Map<string, number>();
+  for (const [ref, old] of oldRefs) {
+    // 子 Frame 条目不参与重锚定(fresh 是主 Frame 扫描,跨 Frame 映射会误指)
+    if ((old.frameIndex ?? 0) > 0) {
+      merged.set(ref, old);
+      continue;
+    }
+    const pool = freshByRole.get(old.role) ?? [];
+    const cursor = cursorByRole.get(old.role) ?? 0;
+    let hit: (typeof fresh)[number] | undefined;
+    let wasDrift = false;
+    for (let i = cursor; i < pool.length; i++) {
+      if (clean(pool[i].name) === clean(old.name)) {
+        hit = pool[i];
+        wasDrift = pool[i].name !== old.name;
+        break;
+      }
+    }
+    if (hit === undefined && old.name !== "") {
+      // 名称漂移兜底:同 role 内最长公共子串占原名 ≥ 0.6 视为同一元素
+      for (let i = cursor; i < pool.length; i++) {
+        const cand = pool[i];
+        if (cand.name === "") continue;
+        const maxLen = Math.max(old.name.length, cand.name.length);
+        let best = 0;
+        for (let a = 0; a < old.name.length; a++) {
+          for (let b = 0; b < cand.name.length; b++) {
+            let n = 0;
+            while (a + n < old.name.length && b + n < cand.name.length && old.name[a + n].toLowerCase() === cand.name[b + n].toLowerCase()) n++;
+            if (n > best) best = n;
+          }
+        }
+        if (maxLen > 0 && best / maxLen >= 0.6) {
+          hit = cand;
+          wasDrift = true;
+          break;
+        }
+      }
+    }
+    if (hit === undefined) {
+      dropped += 1;
+      continue;
+    }
+    // 消费该命中(游标推进到其位置,保证顺序对应)
+    const idx = pool.indexOf(hit);
+    cursorByRole.set(old.role, Math.max(cursor, idx + 1));
+    merged.set(ref, {
+      role: hit.role,
+      name: hit.name,
+      selector: hit.selector,
+      ...(hit.rect !== undefined ? { rect: hit.rect } : {}),
+      ...(hit.scroll !== undefined ? { scroll: hit.scroll } : {}),
+      navSeq: seq,
+    });
+    remapped += 1;
+    if (wasDrift) drifted += 1;
+  }
+  return { merged, remapped, dropped, drifted };
+}
+
 /** 记录一次 aria 快照分配的 ref(整表替换)。 */
 export function setPageRefs(page: Page, refs: Map<string, RefEntry>): void {
   refRegistry.set(page, refs);
@@ -37,6 +154,7 @@ export function assignRefs(
   existing: Map<string, RefEntry>,
   matches: { role: string; name: string; selector: string; ancestors?: string[] }[],
   maxRefs: number,
+  navSeq?: number,
 ): { withRefs: { ref: string; role: string; name: string; selector: string; ancestors?: string[] }[]; merged: Map<string, RefEntry>; truncated: boolean } {
   let next = 0;
   for (const key of existing.keys()) {
@@ -53,7 +171,7 @@ export function assignRefs(
     }
     next += 1;
     const ref = `e${next}`;
-    merged.set(ref, { role: m.role, name: m.name, selector: m.selector });
+    merged.set(ref, { role: m.role, name: m.name, selector: m.selector, ...(navSeq !== undefined ? { navSeq } : {}) });
     withRefs.push({ ref, ...m });
   }
   return { withRefs, merged, truncated };

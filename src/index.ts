@@ -60,6 +60,7 @@ const SCHEMA: ConfigSchema = {
   humanizeSpeed: { type: "string", enum: ["slow", "normal", "fast"], optional: true },
   confirmInReplay: { type: "boolean" },
   somFallback: { type: "boolean" },
+  refReanchor: { type: "boolean" },
   toolset: { type: "string", enum: ["core", "all"] },
 };
 
@@ -91,6 +92,7 @@ const DEFAULT_CONFIG = {
   sensitiveTools: ["browser_click"], // auto 模式参与判定的工具(默认只拦 click)
   confirmInReplay: true, // replay/batch 是否同样走 auto 审批闸
   somFallback: true, // what 语义定位零命中时自动附 SoM 标徽截图(多模态看图后 click { mark: N })
+  refReanchor: true, // SPA 路由导航后 ref 软失效重锚定(按 role+name 指纹;false = 导航即清空的旧行为)
   toolset: "all", // all: 全部工具(默认);core: 只注册高频核心集,低 systemPrompt 常驻 token
 };
 

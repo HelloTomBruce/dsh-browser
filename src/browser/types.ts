@@ -74,6 +74,12 @@ export interface BrowserConfig {
    */
   somFallback?: boolean;
   /**
+   * SPA ref 软失效重锚定(默认 true):主 frame 导航不清空 ref 表,推进
+   * navSeq 代际;定位失败时全量重扫按 role+name 指纹重映射(路由切换场景
+   * DOM 大部分未变,免整轮快照往返)。false 回退「导航即清空」旧行为。
+   */
+  refReanchor?: boolean;
+  /**
    * 工具集:all(默认,全部工具)| core(只注册高频核心集,低频的
    * 录制/回放/报告/抽取/profile 等不注册,降 systemPrompt 常驻 token)。
    */
@@ -130,6 +136,8 @@ export interface RefEntry {
   rect?: { x: number; y: number; w: number; h: number };
   /** 快照时的滚动偏移;坐标兜底按当前 scroll 修正视口位置。 */
   scroll?: { x: number; y: number };
+  /** 注册时的导航代际;落后于 pageNavSeq = 疑似过期(SPA 路由),定位失败时按指纹重锚定。 */
+  navSeq?: number;
 }
 
 /** SoM 标徽(browser_screenshot { som: true })的注册项(id → 定位信息)。 */

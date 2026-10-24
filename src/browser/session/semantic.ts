@@ -14,7 +14,7 @@
 import type { Locator, Page } from "playwright-core";
 import { injectWalker } from "../walker.js";
 import { ACTIVE_DIALOG_SELECTORS } from "../primitives/dialog.js";
-import { assignRefs, pageRefsOf, setPageRefs } from "./cache.js";
+import { assignRefs, pageRefsOf, setPageRefs, pageNavSeq } from "./cache.js";
 import { lcsScore } from "../tools/common.js";
 import type { TargetResolution } from "../types.js";
 
@@ -237,7 +237,7 @@ export async function resolveSemanticTarget(
   if (data.matches.length === 0) {
     return { what: query, candidates: semanticMissCandidates(query, data.candidates) };
   }
-  const { withRefs, merged } = assignRefs(pageRefsOf(page), data.matches, Math.min(Math.max(opts.maxRefs ?? 200, 1), 500));
+  const { withRefs, merged } = assignRefs(pageRefsOf(page), data.matches, Math.min(Math.max(opts.maxRefs ?? 200, 1), 500), pageNavSeq(page));
   setPageRefs(page, merged);
   const best = data.matches[0];
   const bestRef = withRefs.length > 0 ? withRefs[0] : undefined;
@@ -251,3 +251,53 @@ export async function resolveSemanticTarget(
     visibleCount: data.matches.filter((m) => m.visible).length,
   };
 }
+
+/**
+ * 全量可交互元素扫描(SPA ref 重锚定的数据源):返回页面(或 scope 内)全部
+ * 可见可交互元素的 role/name/selector(视口内附 rect/scroll),与 aria 快照
+ * 同一 walker 语义。上限 300 条,超出截断(超大页面重锚定按命中部分处理)。
+ */
+export const scanAllInteractive = injectWalker<
+  { scope?: string },
+  { elements: { role: string; name: string; selector: string; rect?: { x: number; y: number; w: number; h: number }; scroll?: { x: number; y: number } }[]; truncated: boolean }
+>((payload, w) => {
+  const { INTERACTIVE, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible, isElementInViewport, deepChildren } = w;
+  const out: { role: string; name: string; selector: string; rect?: { x: number; y: number; w: number; h: number }; scroll?: { x: number; y: number } }[] = [];
+  let truncated = false;
+  const snapScroll = { x: window.scrollX, y: window.scrollY };
+  let root: Element | null = document.body;
+  if (payload.scope) {
+    try {
+      root = document.querySelector(payload.scope);
+    } catch {
+      root = null;
+    }
+  }
+  if (root === null) return { elements: [], truncated: false };
+  const stack: Element[] = [root];
+  while (stack.length > 0) {
+    const el = stack.pop()!;
+    const role = roleOf(el);
+    if (INTERACTIVE.has(role)) {
+      if (!isVisible(el)) continue;
+      if (out.length >= 300) {
+        truncated = true;
+        break;
+      }
+      const rect = el.getBoundingClientRect();
+      out.push({
+        role,
+        name: nameOf(el, role),
+        selector: cssPath(el),
+        ...(isElementInViewport(el, 0)
+          ? { rect: { x: Math.round(rect.left), y: Math.round(rect.top), w: Math.round(rect.width), h: Math.round(rect.height) }, scroll: snapScroll }
+          : {}),
+      });
+      continue;
+    }
+    for (const c of deepChildren(el)) {
+      if (!SKIP_TAGS.has(c.tagName.toLowerCase())) stack.push(c);
+    }
+  }
+  return { elements: out, truncated };
+});

@@ -5,7 +5,7 @@ import type { Page } from "playwright-core";
 import type { ToolRunContext } from "../../lib/types.js";
 import type { BrowserConfig, RefEntry } from "../types.js";
 import {
-  getPage, activePage, setPageRefs, pageRefsOf,
+  getPage, activePage, setPageRefs, pageRefsOf, pageNavSeq,
   snapshotCacheOf, setSnapshotCache, pushSnapshotVersion, snapshotVersionEntry,
   noteScreenshotDir, cleanupScreenshots, pageIdentity, setPageMarks,
 } from "../session.js";
@@ -161,7 +161,7 @@ export async function findTool(config: BrowserConfig, args: Record<string, any>)
     scope: typeof args.scope === "string" && args.scope ? args.scope : "",
     limit: 20,
   });
-  const { withRefs, merged, truncated } = assignRefs(pageRefsOf(page), data.matches, maxRefs);
+  const { withRefs, merged, truncated } = assignRefs(pageRefsOf(page), data.matches, maxRefs, pageNavSeq(page));
   setPageRefs(page, merged); // 合并(非整表替换):既有 ref 继续有效
   const suggestions = withRefs.length === 0
     ? topSuggestions(query, data.candidates.map(({ role, name }) => ({ role, name })))
@@ -240,7 +240,7 @@ export async function snapshotTool(config: BrowserConfig, args: Record<string, a
       throw new Error(`scope 未命中: 页面中没有匹配 "${scope}" 的元素${hint}`);
     }
     const map = new Map<string, RefEntry>(
-      data.refs.map((r) => [r.ref, { role: r.role, name: r.name, selector: r.selector, ...(r.rect !== undefined ? { rect: r.rect } : {}), ...(r.scroll !== undefined ? { scroll: r.scroll } : {}), frameIndex: 0, frameUrl: page.url() }]),
+      data.refs.map((r) => [r.ref, { role: r.role, name: r.name, selector: r.selector, ...(r.rect !== undefined ? { rect: r.rect } : {}), ...(r.scroll !== undefined ? { scroll: r.scroll } : {}), frameIndex: 0, frameUrl: page.url(), navSeq: pageNavSeq(page) }]),
     );
     let finalTree = data.tree;
     let prunedTotal = data.prunedCount;
@@ -302,6 +302,7 @@ export async function snapshotTool(config: BrowserConfig, args: Record<string, a
                 ...(r.scroll !== undefined ? { scroll: r.scroll } : {}),
                 frameIndex: fIdx,
                 frameUrl: sub.url(),
+                navSeq: pageNavSeq(page),
               });
             }
           }

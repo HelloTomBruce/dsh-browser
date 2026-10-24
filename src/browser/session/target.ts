@@ -1,9 +1,9 @@
 // dsh-browser · 统一目标定位解析门面 (Target Resolution Pipeline)
 import type { Frame, Locator, Page } from "playwright-core";
 import { extractElementLabel, getActiveDialog } from "../primitives/index.js";
-import { pageMark, pageRef } from "./cache.js";
+import { pageMark, pageRef, pageRefsOf, setPageRefs, pageNavSeq, remapRefs, noteReanchorAttempt, reanchorAttempted } from "./cache.js";
 import { withTimeout, lcsScore } from "../tools/common.js";
-import { resolveSemanticTarget, semanticMissMessage } from "./semantic.js";
+import { resolveSemanticTarget, semanticMissMessage, scanAllInteractive } from "./semantic.js";
 import { injectWalker } from "../walker.js";
 import type { TargetResolution } from "../types.js";
 
@@ -214,6 +214,34 @@ export async function resolveTargetLocator(
         }
       } catch {
         /* ignore */
+      }
+    }
+
+    // 降级 4: SPA 软失效重锚定 — entry 代际落后于页面当前代际(路由切换而非
+    // 整页跳转)且本代际未尝试过时,全量重扫按指纹 remap;命中则用新 selector
+    // 再试一次。扫描截断(超大页面)或子 Frame ref 不参与,维持原「已失效」语义。
+    if (
+      !isIFrame &&
+      entry.navSeq !== undefined &&
+      entry.navSeq !== pageNavSeq(page) &&
+      !reanchorAttempted(page)
+    ) {
+      noteReanchorAttempt(page);
+      try {
+        const scan = await withTimeout(page.evaluate(scanAllInteractive, { scope: "" }), 2_500, "重锚定扫描").catch(() => null);
+        if (scan !== null && !scan.truncated && scan.elements.length > 0) {
+          const { merged } = remapRefs(pageRefsOf(page), scan.elements, pageNavSeq(page));
+          setPageRefs(page, merged);
+          const reanchored = pageRef(page, ref);
+          if (reanchored !== undefined && reanchored.selector !== entry.selector) {
+            const loc = container.locator(reanchored.selector).first();
+            if ((await withTimeout(loc.count(), 1_500, "重锚定定位").catch(() => 0)) > 0) {
+              return { locator: loc, container, entry: reanchored, isIFrame };
+            }
+          }
+        }
+      } catch {
+        /* 重锚定失败:维持原错误语义 */
       }
     }
 
