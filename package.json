@@ -34,6 +34,7 @@
     "test:enterprise": "tsx scripts/test-dev-server-enterprise.ts",
     "test:energy": "tsx scripts/test-dev-server-energy.ts",
     "test:shadow": "tsx scripts/test-dev-server-shadow.ts",
+    "test:pick": "tsx scripts/test-panel-pick.ts",
     "dev:server": "tsx scripts/dev-server.ts",
     "verify": "npm run typecheck && npm run lint && npm run test && npm run build",
     "prepublishOnly": "npm run verify"

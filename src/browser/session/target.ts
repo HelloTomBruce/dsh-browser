@@ -40,6 +40,15 @@ const coordinateProbe = injectWalker<
   const cy = payload.y - (window.scrollY - payload.sy);
   if (cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) return null;
   let el: Element | null = document.elementFromPoint(cx, cy);
+  // shadow DOM retarget:命中点落在 open shadow 内容上时 elementFromPoint 返回
+  // 宿主元素,需进入其 shadowRoot.elementFromPoint 逐层下潜取真实元素
+  let dive = 0;
+  while (el !== null && el.shadowRoot !== null && dive < 8) {
+    const inner = el.shadowRoot.elementFromPoint(cx, cy);
+    if (inner === null || inner === el) break;
+    el = inner;
+    dive += 1;
+  }
   let hops = 0;
   while (el !== null && hops < 6) {
     const d = w.describeElement(el);

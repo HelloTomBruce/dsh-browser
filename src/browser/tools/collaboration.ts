@@ -256,6 +256,15 @@ const describePoint = injectWalker<
   | null
 >((payload, w) => {
   let el: Element | null = document.elementFromPoint(payload.x, payload.y);
+  // shadow DOM retarget:命中点落在 open shadow 内容上时 elementFromPoint 返回
+  // 宿主元素,需进入其 shadowRoot.elementFromPoint 逐层下潜取真实元素
+  let dive = 0;
+  while (el !== null && el.shadowRoot !== null && dive < 8) {
+    const inner = el.shadowRoot.elementFromPoint(payload.x, payload.y);
+    if (inner === null || inner === el) break;
+    el = inner;
+    dive += 1;
+  }
   let hops = 0;
   while (el !== null && hops < 6) {
     const d = w.describeElement(el);
