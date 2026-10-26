@@ -403,7 +403,7 @@ const injectSomOverlay = injectWalker<{ maxMarks: number; color: string }, Array
   rect?: { x: number; y: number; w: number; h: number };
   scroll?: { x: number; y: number };
 }>>((payload, w) => {
-  const { INTERACTIVE, roleOf, nameOf, cssPath, isVisible, isElementInViewport, deepChildren } = w;
+  const { INTERACTIVE, roleOf, nameOf, cssPath, isVisible, isElementInViewport, deepChildren, isProbablyClickable } = w;
   const marks: Array<{ id: number; role: string; name: string; selector: string; rect?: { x: number; y: number; w: number; h: number }; scroll?: { x: number; y: number } }> = [];
   const snapScroll = { x: window.scrollX, y: window.scrollY };
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -416,6 +416,11 @@ const injectSomOverlay = injectWalker<{ maxMarks: number; color: string }, Array
     if (INTERACTIVE.has(role) && isVisible(el) && isElementInViewport(el, 0)) {
       candidates.push(el);
       return;
+    }
+    // 疑似可点击 generic 元素(span+click 等)同样进标徽——与 what 扫描同一 walker
+    // 判定,防止"what 找不到、标徽也没有"的分叉;仍下钻子树。
+    if (isVisible(el) && isElementInViewport(el, 0) && isProbablyClickable(el)) {
+      candidates.push(el);
     }
     for (const c of deepChildren(el)) {
       if (c.tagName !== "SCRIPT" && c.tagName !== "STYLE") collect(c);
@@ -432,8 +437,13 @@ const injectSomOverlay = injectWalker<{ maxMarks: number; color: string }, Array
     const rect = el.getBoundingClientRect();
     if (rect.width < 8 || rect.height < 8) continue;
     count += 1;
-    const role = roleOf(el);
-    const name = nameOf(el, role);
+    const realRole = roleOf(el);
+    // 疑似可点击 generic 元素以伪角色 "clickable" + 文本入标徽(与 what 扫描同语义)
+    const role = realRole === "" ? "clickable" : realRole;
+    const name =
+      realRole === ""
+        ? ((el as HTMLElement).innerText || el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 60)
+        : nameOf(el, realRole);
 
     const x = Math.max(0, rect.left);
     const y = Math.max(0, rect.top);

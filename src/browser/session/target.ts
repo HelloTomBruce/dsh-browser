@@ -93,6 +93,30 @@ export async function resolveTargetLocator(
   page: Page,
   args: Record<string, any>,
 ): Promise<TargetResolution> {
+  // 定位参数互斥硬校验:ref/mark/what/selector 四选一。历史上按
+  // ref > mark > row > what > selector 静默择一,what 被无声丢弃后报错只字未提,
+  // 误导排查方向(实战两次踩坑)。唯一豁免:row/rowText 行级管线可组合 selector
+  // (作为行内动作定位);容器内语义定位的正统写法是 what + scope。
+  {
+    const present: string[] = [];
+    if (args.ref !== undefined && args.ref !== "") present.push("ref");
+    if (args.mark !== undefined) present.push("mark");
+    if (typeof args.what === "string" && args.what.trim() !== "") present.push("what");
+    if (args.selector !== undefined && args.selector !== "") present.push("selector");
+    const rowGiven = args.rowText !== undefined || args.row !== undefined;
+    if (rowGiven && present.some((k) => k !== "selector")) {
+      const offending = present.filter((k) => k !== "selector");
+      throw new Error(
+        `定位参数冲突: row/rowText 与 ${offending.join("、")} 不能同时使用(行级定位仅可组合 selector 限定行内目标);在行内按意图找按钮请用 row + action/actionText`,
+      );
+    }
+    if (present.length >= 2) {
+      throw new Error(
+        `定位参数冲突: 同时传了 ${present.join(" 与 ")} —— ref/mark/what/selector 四选一;若要在容器内语义定位,请用 what + scope(容器选择器)`,
+      );
+    }
+  }
+
   if (args.ref !== undefined && args.ref !== "") {
     const ref = String(args.ref);
     const entry = pageRef(page, ref);
@@ -347,6 +371,42 @@ export async function resolveTargetLocator(
       const loc = page.getByRole(role as any, { name: buildFlexibleTextPattern(what) }).first();
       if ((await withTimeout(loc.count(), 800, "语义 role 兜底").catch(() => 0)) > 0) {
         return { locator: loc, container: page, isIFrame: false, matchedCount: 1, visibleCount: 1 };
+      }
+    }
+    // bridge 兜底:接入 vite-plugin-dsh-bridge 的项目,页面存在 __DSH_BRIDGE__ 且
+    // 暴露 resolveActionTarget 时,未命中自动用桥的语义地图反哺定位(桥的静态
+    // 分析覆盖宿主扫描看不到的自定义组件)。纯 feature-detect,失败/shape 不符
+    // 静默回落原错误,不放大;返回的 selector 仍走 Playwright 正常定位管线。
+    {
+      const bridgeHit = await withTimeout(
+        page.evaluate(
+          async (q: string) => {
+            const b = (window as any).__DSH_BRIDGE__;
+            if (b === undefined || typeof b.resolveActionTarget !== "function") return null;
+            const targets = await b.resolveActionTarget({ query: q });
+            if (!Array.isArray(targets) || targets.length === 0) return null;
+            const t = targets[0] as { selector?: unknown } | null;
+            if (t === null || typeof t !== "object" || typeof t.selector !== "string" || t.selector === "") return null;
+            return { selector: t.selector };
+          },
+          what,
+        ),
+        2_500,
+        "bridge 兜底",
+      ).catch(() => null);
+      // 节点侧 shape 防御(桥返回属不可信页面数据):仅接受 { selector: 非空字符串 }
+      const bridgeSelector =
+        bridgeHit !== null &&
+        typeof bridgeHit === "object" &&
+        typeof (bridgeHit as { selector?: unknown }).selector === "string" &&
+        (bridgeHit as { selector: string }).selector !== ""
+          ? (bridgeHit as { selector: string }).selector
+          : null;
+      if (bridgeSelector !== null) {
+        const loc = page.locator(bridgeSelector).first();
+        if ((await withTimeout(loc.count(), 1_500, "bridge 兜底定位").catch(() => 0)) > 0) {
+          return { locator: loc, container: page, isIFrame: false, matchedCount: 1, visibleCount: 1, viaBridge: true };
+        }
       }
     }
     // miss 数据挂在错误对象上,供 clickTool 走 SoM 截图兜底(多模态看图定位)

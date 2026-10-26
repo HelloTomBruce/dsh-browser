@@ -3,7 +3,7 @@ import { existsSync, statSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve, isAbsolute } from "node:path";
 import type { Locator, Page } from "playwright-core";
 import type { ToolRunContext } from "../../lib/types.js";
-import type { BrowserConfig, FormField } from "../types.js";
+import type { BrowserConfig, FormField, TargetResolution } from "../types.js";
 import {
   getPage, activePage, pageRef, pageIdentity,
   savedForms, lastFormFields, setLastFormFields,
@@ -31,6 +31,30 @@ import { humanClick } from "../stealth/mouse.js";
 import { humanType } from "../stealth/keyboard.js";
 
 export { targetLocator, resolveTargetLocator };
+
+/** 多命中可见化:解析层 matchedCount/visibleCount 透传到成功返回,>1 附操作指引。
+ * 防同名字段静默打进被遮罩的背景元素(背景表单 + Modal 同名字段场景)。 */
+function ambiguityFields(res: TargetResolution): Record<string, unknown> {
+  const matched = res.matchedCount;
+  if (matched === undefined) return {};
+  return {
+    matchedCount: matched,
+    ...(res.visibleCount !== undefined ? { visibleCount: res.visibleCount } : {}),
+    ...(matched > 1
+      ? {
+          hint: `命中 ${matched} 个元素(可见 ${res.visibleCount ?? 0}),已操作第 1 个;建议用 scope 限定或 browser_snapshot 取 ref 消歧`,
+        }
+      : {}),
+  };
+}
+
+/** strict 模式(对齐 Playwright strict):多命中直接拒绝,要求定位唯一。 */
+function strictReject(args: Record<string, any>, res: TargetResolution): Error | null {
+  if (args.strict !== true || (res.matchedCount ?? 0) <= 1) return null;
+  return new Error(
+    `strict 模式拒绝多命中: 命中 ${res.matchedCount} 个元素(可见 ${res.visibleCount ?? 0}),要求定位唯一;请用 scope 限定、更特异的 selector 或 browser_snapshot 取 ref`,
+  );
+}
 
 export function isBotSensitiveUrl(url: string): boolean {
   if (!url) return false;
@@ -69,6 +93,9 @@ export async function clickTool(config: BrowserConfig, args: Record<string, any>
   }
   let target = targetRes.locator;
   const label = String(args.ref ?? args.selector ?? args.mark ?? args.what ?? "");
+
+  const strictErr = strictReject(args, targetRes);
+  if (strictErr !== null) throw strictErr;
 
   // 1. 隐藏 input 点击目标提升 (Target Lifting)
   target = await liftTargetIfHiddenInput(target);
@@ -202,19 +229,26 @@ export async function clickTool(config: BrowserConfig, args: Record<string, any>
       clicked: String(args.ref ?? args.selector ?? args.mark ?? args.what ?? (args.row ? `row: ${args.row}` : "target")),
       effect,
       ...(quiet ? { effectHint: "点击后未观察到任何 DOM/URL/网络变化,可能未生效(被遮挡/事件被吞/前置条件未满足);建议 browser_snapshot 核实或换目标" } : {}),
+      ...ambiguityFields(targetRes),
+      ...(targetRes.viaBridge === true ? { viaBridge: true } : {}),
       ...(await pageIdentity(page)),
     };
   }
 
   return {
     clicked: String(args.ref ?? args.selector ?? args.mark ?? args.what ?? (args.row ? `row: ${args.row}` : "target")),
+    ...ambiguityFields(targetRes),
+    ...(targetRes.viaBridge === true ? { viaBridge: true } : {}),
     ...(await pageIdentity(page)),
   };
 }
 
 export async function typeTool(config: BrowserConfig, args: Record<string, any>) {
   const page = await getPage(config);
-  const target = await targetLocator(page, args);
+  const targetRes = await resolveTargetLocator(page, args);
+  const target = targetRes.locator;
+  const strictErr = strictReject(args, targetRes);
+  if (strictErr !== null) throw strictErr;
   const text = String(args.text ?? "");
   const isHuman =
     args.humanize === true ||
@@ -229,6 +263,7 @@ export async function typeTool(config: BrowserConfig, args: Record<string, any>)
         typed: true,
         editor: true,
         selector,
+        ...ambiguityFields(targetRes),
         ...(await pageIdentity(page)),
       };
     }
@@ -242,9 +277,17 @@ export async function typeTool(config: BrowserConfig, args: Record<string, any>)
       await target.fill(text, { timeout: args.timeoutMs ?? config.timeoutMs });
     }
   } else {
+    // 多命中或 strict 时不再 force 降级点击:遮罩拦截(如 Modal 背景的同名输入框)
+    // 必须暴露出来,而不是被 force 抹平后静默打进错误目标
+    const ambiguous = args.strict === true || (targetRes.matchedCount ?? 0) > 1;
     try {
       await target.click({ timeout: Math.min(args.timeoutMs ?? config.timeoutMs, 5_000) });
-    } catch {
+    } catch (e) {
+      if (ambiguous) {
+        throw new Error(
+          `type 定位目标存在歧义(命中 ${targetRes.matchedCount ?? "?"} 个元素)且首个不可交互,已中止;请用 scope 限定或 browser_snapshot 取 ref 消歧;原始错误: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
       await target.click({ timeout: 2_000, force: true }).catch(() => {});
     }
     if (isHuman) {
@@ -258,6 +301,7 @@ export async function typeTool(config: BrowserConfig, args: Record<string, any>)
     typed: true,
     selector: String(args.ref ?? args.selector),
     submit: args.submit === true,
+    ...ambiguityFields(targetRes),
     ...(await pageIdentity(page)),
   };
 }
@@ -303,10 +347,18 @@ export async function pressTool(config: BrowserConfig, args: Record<string, any>
   }
 
   if (args.selector !== undefined || args.ref !== undefined || (typeof args.what === "string" && args.what.trim() !== "")) {
-    const target = await targetLocator(page, args);
-    await target.press(key, {
+    const targetRes = await resolveTargetLocator(page, args);
+    const strictErr = strictReject(args, targetRes);
+    if (strictErr !== null) throw strictErr;
+    await targetRes.locator.press(key, {
       timeout: args.timeoutMs ?? config.timeoutMs,
     });
+    return {
+      pressed: key,
+      ...(warning ? { warning } : {}),
+      ...ambiguityFields(targetRes),
+      ...(await pageIdentity(page)),
+    };
   } else {
     await page.keyboard.press(key);
   }
@@ -326,8 +378,11 @@ export async function pressTool(config: BrowserConfig, args: Record<string, any>
  */
 export async function selectTool(config: BrowserConfig, args: Record<string, any>) {
   const page = await getPage(config);
-  const target = await targetLocator(page, args);
-  const label = String(args.ref ?? args.selector);
+  const targetRes = await resolveTargetLocator(page, args);
+  const target = targetRes.locator;
+  const strictErr = strictReject(args, targetRes);
+  if (strictErr !== null) throw strictErr;
+  const label = String(args.ref ?? args.selector ?? args.what ?? "");
   const want = String(args.option ?? "");
   if (!want) throw new Error("select 需要 option(选项文本)");
   const exact = args.exact === true;
@@ -343,7 +398,12 @@ export async function selectTool(config: BrowserConfig, args: Record<string, any
     clear: args.clear === true,
   });
 
-  return { selected: result.selected, selector: label, ...(await pageIdentity(page)) };
+  return {
+    selected: result.selected,
+    selector: label,
+    ...ambiguityFields(targetRes),
+    ...(await pageIdentity(page)),
+  };
 }
 
 export async function evalTool(config: BrowserConfig, args: Record<string, any>) {

@@ -23,12 +23,12 @@ describe("mark 定位分支 (SoM 标徽)", () => {
     await expect(resolveTargetLocator(page, { mark: 9 })).rejects.toThrow("未知 mark: 9");
   });
 
-  it("selector 优先级高于 mark", async () => {
+  it("mark 与 selector 同时传 → 互斥硬校验报错(不再静默按 selector 择一)", async () => {
     const locMock: any = { first: () => locMock };
     const page: any = { locator: vi.fn().mockReturnValue(locMock) } as unknown as Page;
     setPageMarks(page, new Map([[1, { role: "button", name: "x", selector: "#m" }]]));
-    await resolveTargetLocator(page, { mark: 1, selector: "#s" });
-    expect(page.locator).toHaveBeenCalledWith("#s");
+    await expect(resolveTargetLocator(page, { mark: 1, selector: "#s" })).rejects.toThrow(/定位参数冲突/);
+    expect(page.locator).not.toHaveBeenCalled();
   });
 
   it("mark 路径失效时降级 getByRole", async () => {

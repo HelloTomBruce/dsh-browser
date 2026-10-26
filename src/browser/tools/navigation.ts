@@ -11,15 +11,42 @@ export async function openTool(configOrArgs: BrowserConfig | Record<string, any>
   const isSingleArg = maybeArgs === undefined;
   const config = (isSingleArg && typeof (configOrArgs as any)?.url === "string" ? {} : configOrArgs) as BrowserConfig;
   const args = (isSingleArg ? configOrArgs : maybeArgs) as Record<string, any>;
-  const page = await getPage(config ?? {});
-  await page.goto(String(args.url), {
-    waitUntil: args.waitUntil ?? "domcontentloaded",
-    timeout: args.timeoutMs ?? config?.timeoutMs,
+  const state = stateOf();
+  // 僵尸标签自愈:"我要去某个 URL"的意图下换新页无歧义(与 getPage 的报错引导互补)
+  let recovered: string | undefined;
+  const freshPage = async () => {
+    const p = await newPage(config ?? {});
+    registerTabPage(state, p);
+    recovered = "new-tab";
+    return p;
+  };
+  let page = await getPage(config ?? {}).catch(async (e: any) => {
+    if (e?.code === "activeTabClosed") return freshPage();
+    throw e;
   });
+  if (page.isClosed()) page = await freshPage();
+  try {
+    await page.goto(String(args.url), {
+      waitUntil: args.waitUntil ?? "domcontentloaded",
+      timeout: args.timeoutMs ?? config?.timeoutMs,
+    });
+  } catch (e) {
+    // goto 途中目标页被关闭(竞态):换新页重试一次;仍失败则如实抛出
+    if (recovered === undefined && /has been closed/.test(String((e as Error)?.message ?? e))) {
+      page = await freshPage();
+      await page.goto(String(args.url), {
+        waitUntil: args.waitUntil ?? "domcontentloaded",
+        timeout: args.timeoutMs ?? config?.timeoutMs,
+      });
+    } else {
+      throw e;
+    }
+  }
   return {
     url: page.url(),
     title: await page.title(),
     status: "ok",
+    ...(recovered !== undefined ? { recovered } : {}),
   };
 }
 
@@ -180,9 +207,7 @@ export async function tabsTool(config: BrowserConfig, args: Record<string, any>)
     }
     case "new": {
       const page = await newPage(config);
-      const id = state.counter++;
-      state.pages.set(id, page);
-      state.activeId = id;
+      const id = registerTabPage(state, page);
       if (args.url) {
         await page.goto(String(args.url), {
           waitUntil: args.waitUntil ?? "domcontentloaded",
@@ -201,12 +226,11 @@ export async function tabsTool(config: BrowserConfig, args: Record<string, any>)
       const id = resolveTabId(args);
       const page = state.pages.get(id);
       if (page === undefined) throw new Error(`no tab with id ${id}`);
-      await page.close().catch(() => {});
+      // 先摘注册表再关页:close 事件监听器因 id 已不在而跳过,activeId 语义在此显式确定
       state.pages.delete(id);
-      if (state.activeId === id) {
-        const next = state.pages.keys().next().value;
-        state.activeId = next === undefined ? null : next;
-      }
+      state.tabMeta?.delete(id);
+      if (state.activeId === id) state.activeId = null;
+      await page.close().catch(() => {});
       return { action, activeId: state.activeId ?? -1, tabs: await tabList() };
     }
     default:

@@ -272,7 +272,7 @@ async function startServer() {
       if (pathname === "/screenshot" && req.method === "POST") {
         const body = await readJson(req);
         const name = body.name || `shot-${Date.now()}.png`;
-        const shotRes = await screenshotTool(config, { name }, exec);
+        const shotRes = await screenshotTool(config, { name, ...(body.som === true ? { som: true } : {}) }, exec);
         return sendJson(res, 200, shotRes);
       }
 

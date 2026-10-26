@@ -37,7 +37,7 @@ export function getTestingTools(
     definePlainTool({
       name: "browser_wait_for",
       description:
-        "通用显式等待(测试同步原语):轮询直到条件成立或超时抛错。condition 格式(可放在 condition 对象内，也可直接平铺于顶层参数): 1) {selector:'#btn', state:'visible|hidden|attached|detached'}; 2) {ref:'e1', state}; 3) {row:'TASK-1002', action:'编辑', state}; 4) {url:'正则'}; 5) {text:'子串'}; 6) {count:{selector,op,value}}; 7) {eval:'JS 表达式' (支持纯表达式或 return 语句)}。用于等页面渲染、等请求完成、等元素出现。",
+        "通用显式等待(测试同步原语):轮询直到条件成立或超时抛错。condition 格式(可放在 condition 对象内，也可直接平铺于顶层参数): 1) {selector:'#btn', state:'visible|hidden|attached|detached'}; 2) {ref:'e1', state}; 3) {row:'TASK-1002', action:'编辑', state}; 4) {url:'正则'}; 5) {text:'子串'}; 6) {count:{selector,op,value}}; 7) {eval:'JS 表达式' (支持纯表达式或 return 语句)}; 8) {bridge:{method:'桥方法名', args?:[], expect?:期望值 / expectContains:'子串'}} —— 页内调用 __DSH_BRIDGE__(vite-plugin-dsh-bridge)方法并断言返回(缺省判 truthy;expect 深比较),让桥取数与宿主等待无缝衔接。用于等页面渲染、等请求完成、等元素出现。",
       parameters: {
         type: "object",
         properties: {
@@ -68,11 +68,11 @@ export function getTestingTools(
     definePlainTool({
       name: "browser_assert",
       description:
-        "结构化断言(测试核心):condition 在 timeoutMs 内成立则通过(条件格式同 browser_wait_for，支持 selector/ref/row+action/url/text/count/eval，亦可直接平铺在顶层参数)。失败时自动截图存证据目录(assert-fail-*.png)并抛错,错误消息含原因与截图路径。另支持视觉回归:传 visual={baseline, threshold?, maxDiffRatio?, mask?} 与基线截图做像素比对(browser_screenshot 的 baseline 建立基线;mask 为忽略的选择器数组,如时钟/广告位),失败时产出当前截图与红标 diff 图。适合断言登录成功、关键元素出现、接口返回、文本正确、页面无视觉回归。",
+        "结构化断言(测试核心):condition 在 timeoutMs 内成立则通过(条件格式同 browser_wait_for，支持 selector/ref/row+action/url/text/count/eval/bridge，亦可直接平铺在顶层参数)。bridge 条件 {bridge:{method,args?,expect?/expectContains?}} 页内调用 __DSH_BRIDGE__(vite-plugin-dsh-bridge)方法断言返回——桥取数、宿主断言留证(失败自动截图)。失败时自动截图存证据目录(assert-fail-*.png)并抛错,错误消息含原因与截图路径。另支持视觉回归:传 visual={baseline, threshold?, maxDiffRatio?, mask?} 与基线截图做像素比对(browser_screenshot 的 baseline 建立基线;mask 为忽略的选择器数组,如时钟/广告位),失败时产出当前截图与红标 diff 图。适合断言登录成功、关键元素出现、接口返回、文本正确、页面无视觉回归。",
       parameters: {
         type: "object",
         properties: {
-          condition: { type: "object", description: "断言条件(同 browser_wait_for,另支持 {ref, state})。" },
+          condition: { type: "object", description: "断言条件(同 browser_wait_for,另支持 {ref, state} 与 {bridge:{method,args?,expect?}})。" },
           visual: {
             type: "object",
             description: "视觉断言:{ baseline: 基线名, threshold?: 像素亮度阈值(默认0.1), maxDiffRatio?: 允许的差异像素比例(默认0.005), mask?: 忽略区域选择器数组 }。",
@@ -105,7 +105,7 @@ export function getTestingTools(
         type: "object",
         properties: {
           action: { type: "string", enum: ["list", "failed", "wait", "stats", "clear"], description: "默认 list。" },
-          urlSubstr: { type: "string", description: "URL 子串过滤(list/failed)。" },
+          urlSubstr: { type: "string", description: "URL 子串过滤(list/failed,大小写不敏感;零命中时附 suggestions 相近 URL 候选,防误判接口未调用)。" },
           method: { type: "string", description: "HTTP 方法过滤(list/failed)。" },
           status: { type: "integer", description: "状态码过滤(list/failed)。" },
           limit: { type: "integer", description: "返回条数上限,默认 50。" },
@@ -124,6 +124,7 @@ export function getTestingTools(
           matched: { type: "object" },
           waitMs: { type: "integer" },
           cleared: { type: "boolean" },
+          suggestions: { type: "array", items: { type: "string" }, description: "urlSubstr 零命中时的 top5 相近 URL 候选。" },
         },
         required: [],
       },

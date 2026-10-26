@@ -73,6 +73,10 @@ export function compileToPlaywrightSpec(steps: ReplayStep[], options: CompileOpt
           lines.push(
             `    await page.locator(${JSON.stringify(args.selector)}).waitFor({ state: ${JSON.stringify(state)} });`,
           );
+        } else if (args.condition?.bridge !== undefined || args.bridge !== undefined) {
+          lines.push(
+            `    // bridge 条件请在接入 vite-plugin-dsh-bridge 的环境手动断言: await __DSH_BRIDGE__.<method>(...)`,
+          );
         }
         break;
       }
@@ -89,6 +93,12 @@ export function compileToPlaywrightSpec(steps: ReplayStep[], options: CompileOpt
           } else {
             lines.push(`    await expect(page.locator(${JSON.stringify(sel)})).toBeHidden();`);
           }
+        } else if (args.condition?.bridge !== undefined || args.bridge !== undefined) {
+          const bridge = args.condition?.bridge ?? args.bridge;
+          lines.push(
+            `    // bridge 断言请在接入 vite-plugin-dsh-bridge 的环境手动执行: ` +
+              `const v = await __DSH_BRIDGE__.${String(bridge?.method ?? "method")}(); expect(v).toBeTruthy();`,
+          );
         }
         break;
       }

@@ -95,6 +95,8 @@ export interface ProfileState {
   activeId: number | null;
   counter: number;
   channel?: string;
+  /** 标签元数据(id → createdAt);随 pages 同步增删,僵尸标签治理用。 */
+  tabMeta?: Map<number, { createdAt: number }>;
 }
 
 /** 一次页面下载的记录。 */
@@ -166,6 +168,8 @@ export interface TargetResolution {
   visibleCount?: number;
   /** 语义定位的备选目标(按打分次序,最多 2 个);点击效果验证无变化时自动换选。 */
   alternates?: Locator[];
+  /** 经 window.__DSH_BRIDGE__.resolveActionTarget 兜底命中(vite-plugin-dsh-bridge 反哺)。 */
+  viaBridge?: boolean;
 }
 
 /** 录制时采集的选择器指纹(回放自愈的降级候选来源)。 */

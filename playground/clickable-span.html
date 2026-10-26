@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>疑似可点击启发式测试页</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 24px; background: #f6f8fa; color: #24292f; }
+    h2 { margin-top: 0; }
+    .tip { font-size: 13px; color: #57606a; background: #fff8c5; border: 1px solid #d4a72c; border-radius: 6px; padding: 8px 12px; display: inline-block; }
+    .row { margin: 10px 0; }
+    #status { margin-top: 12px; font-size: 14px; font-weight: 600; }
+    .pseudo-pointer { cursor: pointer; color: #0969da; }
+    .decor { color: #8b949e; }
+  </style>
+</head>
+<body>
+  <h2>疑似可点击启发式测试页(裸静态,无框架)</h2>
+  <div class="tip">本页验证 what 语义定位与 SoM 标徽对「无 ARIA 角色但可点击」元素(span+click)的识别:① cursor:pointer ② onclick 属性 ③ tabindex;以及真实按钮恒优先、纯文本不误报。</div>
+
+  <div class="row">
+    <!-- ① cursor:pointer 特征(自定义组件最常见形态) -->
+    <span class="pseudo-pointer" id="back-span" data-testid="back-span">返回上一级</span>
+  </div>
+  <div class="row">
+    <!-- ② onclick 属性特征(遗留代码常见) -->
+    <span id="legacy-span" onclick="window.__legacyClicked = true; document.getElementById('status').textContent = '展开更多 已点击'">展开更多</span>
+  </div>
+  <div class="row">
+    <!-- ③ tabindex 特征(键盘可聚焦的自定义控件) -->
+    <span id="fav-span" tabindex="0" role="presentation">收藏本页</span>
+  </div>
+  <div class="row">
+    <!-- ⑤ 真实按钮对照:与 ④ 伪可点击 span 同名,真实按钮必须恒优先 -->
+    <button type="button" id="real-refresh" data-testid="real-refresh">刷新数据</button>
+    <span class="pseudo-pointer" id="fake-refresh">刷新数据</span>
+  </div>
+  <div class="row">
+    <!-- 负例:纯文本 span,无 pointer/onclick/tabindex 特征,不应当命中 -->
+    <span class="decor" id="plain-span">纯文本说明</span>
+  </div>
+  <div id="status">尚未点击</div>
+
+  <script>
+    document.getElementById("back-span").addEventListener("click", () => {
+      document.getElementById("status").textContent = "返回上一级 已点击";
+    });
+    document.getElementById("fav-span").addEventListener("click", () => {
+      document.getElementById("status").textContent = "收藏本页 已点击";
+    });
+    document.getElementById("real-refresh").addEventListener("click", () => {
+      document.getElementById("status").textContent = "真实按钮刷新 已点击";
+    });
+    document.getElementById("fake-refresh").addEventListener("click", () => {
+      document.getElementById("status").textContent = "伪span刷新 已点击";
+    });
+  </script>
+</body>
+</html>

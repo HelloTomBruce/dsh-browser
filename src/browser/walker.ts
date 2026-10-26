@@ -229,7 +229,27 @@ function __walkerCore() {
     };
   }
 
-  return { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible, isElementInViewport, describeElement, composedParent, deepChildren };
+  /** 疑似可点击 generic 元素(自定义组件的 span+click 等):无 ARIA 角色或显式
+   * presentational(presentation/none)但具备 cursor:pointer / onclick 属性 /
+   * tabindex≥0 特征且有非空文本(≤60 字符)。仅供扫描语义消费(what 语义扫描与
+   * SoM 标徽共用,防判定分叉);aria 快照不纳入(避免噪音)——这是记录在案的
+   * 设计分叉,见产品文档 03。 */
+  function isProbablyClickable(el: Element): boolean {
+    const role = roleOf(el);
+    if (role !== "" && role !== "presentation" && role !== "none") return false;
+    const text = ((el as HTMLElement).innerText || el.textContent || "").trim();
+    if (text === "" || text.length > 60) return false;
+    if (el.hasAttribute("onclick")) return true;
+    const ti = (el as HTMLElement).tabIndex;
+    if (typeof ti === "number" && ti >= 0) return true;
+    try {
+      return getComputedStyle(el).cursor === "pointer";
+    } catch {
+      return false;
+    }
+  }
+
+  return { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible, isElementInViewport, describeElement, composedParent, deepChildren, isProbablyClickable };
 }
 
 /** walker 核心注入后暴露给 entry 的 API(类型层)。 */

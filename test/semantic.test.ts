@@ -99,18 +99,18 @@ describe("resolveSemanticTarget 编排", () => {
 });
 
 describe("resolveTargetLocator 的 what 分支", () => {
-  it("what 命中走语义解析;selector/ref/row 优先级高于 what", async () => {
+  it("what 命中走语义解析;what 与 selector 同传 → 互斥硬校验(不再静默按 selector 择一)", async () => {
     const scan = scanResult([
       { role: "button", name: "登录", selector: "#login", text: "登录", visible: true, inDialog: false, score: 153, ancestors: [] },
     ]);
     const page = mockPage(scan);
     const res = await resolveTargetLocator(page, { what: "登录" });
     expect(res.isIFrame).toBe(false);
-    // selector 仍然优先:what 不触发语义扫描
+    // 冲突直接报参数错误,what 不被无声丢弃
     const page2 = mockPage(scanResult([]));
     const locatorMock: any = { first: () => locatorMock };
     (page2 as any).locator = vi.fn().mockReturnValue(locatorMock);
-    await resolveTargetLocator(page2, { what: "登录", selector: "#x" });
+    await expect(resolveTargetLocator(page2, { what: "登录", selector: "#x" })).rejects.toThrow(/定位参数冲突/);
     expect((page2 as any).evaluate).not.toHaveBeenCalled();
   });
 

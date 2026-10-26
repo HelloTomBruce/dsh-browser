@@ -54,7 +54,7 @@ export const scanInteractive = injectWalker<
   { query: string; exact: boolean; scope: string; limit: number; dialogSelector?: string },
   { matches: SemanticMatch[]; candidates: { role: string; name: string; selector: string }[]; scanned: number }
 >((payload, w) => {
-  const { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible, deepChildren, composedParent } = w;
+  const { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible, deepChildren, composedParent, isProbablyClickable } = w;
 
   function resolveScopeRoot(scopeStr: string): Element | null {
     if (!scopeStr) return document.body;
@@ -172,6 +172,39 @@ export const scanInteractive = injectWalker<
       }
       continue; // 可交互元素不深入
     }
+    if (isVisible(el) && isProbablyClickable(el)) {
+      const text = ((el as HTMLElement).innerText || el.textContent || "").trim().slice(0, 60);
+      const n = text.toLowerCase();
+      const nStr = n.replace(/\s+/g, "");
+      const legacyHit = payload.exact
+        ? n === q || nStr === qStripped
+        : n.includes(q) || (qStripped !== "" && nStr.includes(qStripped));
+      let tokenScore = 0;
+      let tokenHit = true;
+      for (const t of tokens) {
+        const tStr = t.replace(/\s+/g, "");
+        if (n.includes(t) || (tStr !== "" && nStr.includes(tStr))) tokenScore += 3;
+        else {
+          tokenHit = false;
+          break;
+        }
+      }
+      if (legacyHit && n === q) tokenScore += 50;
+      const hit = payload.exact ? legacyHit : legacyHit || (tokens.length > 0 && tokenHit);
+      if (candidates.length < 50) candidates.push({ role: "clickable", name: text, selector: cssPath(el) });
+      if (hit && hits.length < 100) {
+        hits.push({
+          role: "clickable",
+          name: text,
+          selector: cssPath(el),
+          text,
+          visible: true,
+          inDialog: dialogSel !== "" ? Boolean(el.closest(dialogSel)) : false,
+          score: (legacyHit ? 100 : 0) + tokenScore - 200,
+          ancestors: ancestorsOf(el),
+        });
+      }
+    }
     for (const c of deepChildren(el)) {
       if (!SKIP_TAGS.has(c.tagName.toLowerCase())) stack.push(c);
     }
@@ -266,7 +299,7 @@ export const scanAllInteractive = injectWalker<
   { scope?: string },
   { elements: { role: string; name: string; selector: string; rect?: { x: number; y: number; w: number; h: number }; scroll?: { x: number; y: number } }[]; truncated: boolean }
 >((payload, w) => {
-  const { INTERACTIVE, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible, isElementInViewport, deepChildren } = w;
+  const { INTERACTIVE, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible, isElementInViewport, deepChildren, isProbablyClickable } = w;
   const out: { role: string; name: string; selector: string; rect?: { x: number; y: number; w: number; h: number }; scroll?: { x: number; y: number } }[] = [];
   let truncated = false;
   const snapScroll = { x: window.scrollX, y: window.scrollY };
@@ -299,6 +332,20 @@ export const scanAllInteractive = injectWalker<
           : {}),
       });
       continue;
+    }
+    // 疑似可点击 generic 元素(与 scanInteractive 同一 walker 判定):SoM 标徽与
+    // 重锚定自此能看到 span+click 类元素,与 what 扫描不分叉;仍下钻子树。
+    if (out.length < 300 && isVisible(el) && isProbablyClickable(el)) {
+      const text = ((el as HTMLElement).innerText || el.textContent || "").trim();
+      const rect = el.getBoundingClientRect();
+      out.push({
+        role: "clickable",
+        name: text.slice(0, 60),
+        selector: cssPath(el),
+        ...(isElementInViewport(el, 0)
+          ? { rect: { x: Math.round(rect.left), y: Math.round(rect.top), w: Math.round(rect.width), h: Math.round(rect.height) }, scroll: snapScroll }
+          : {}),
+      });
     }
     for (const c of deepChildren(el)) {
       if (!SKIP_TAGS.has(c.tagName.toLowerCase())) stack.push(c);

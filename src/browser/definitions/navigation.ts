@@ -16,7 +16,7 @@ export function getNavigationTools(
     definePlainTool({
       name: "browser_open",
       description:
-        "在共享浏览器中打开一个 URL。之后可用 browser_snapshot 读取页面内容,用 browser_click / browser_type / browser_eval 操作页面,用 browser_screenshot 截图。",
+        "在共享浏览器中打开一个 URL。活动标签已关闭或崩溃时自动新建标签重试(返回标 recovered: 'new-tab')。之后可用 browser_snapshot 读取页面内容,用 browser_click / browser_type / browser_eval 操作页面,用 browser_screenshot 截图。",
       parameters: {
         type: "object",
         properties: {
@@ -38,6 +38,7 @@ export function getNavigationTools(
           url: { type: "string" },
           title: { type: "string" },
           status: { type: "string" },
+          recovered: { type: "string", description: "活动标签已死自动换新页时为 'new-tab'。" },
         },
         required: ["url", "title", "status"],
       },
@@ -113,7 +114,7 @@ export function getNavigationTools(
     definePlainTool({
       name: "browser_tabs",
       description:
-        "管理浏览器多标签页:list 列出所有标签,new 新建(可选带 url),switch 按 id 或 index 切换,close 关闭指定标签。id 来自 list 结果。",
+        "管理浏览器多标签页:list 列出所有标签(每项含 createdAt 注册时间;已关闭的僵尸页自动摘除),new 新建(可选带 url),switch 按 id 或 index 切换,close 关闭指定标签。id 来自 list 结果。",
       parameters: {
         type: "object",
         properties: {

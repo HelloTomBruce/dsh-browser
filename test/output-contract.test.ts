@@ -154,6 +154,18 @@ describe("静态契约:所有工具声明完整 outputSchema", () => {
       expect(Array.isArray(schema.required), `${name} outputSchema.required 应为数组`).toBe(true);
     }
   });
+
+  it("交互四工具声明 matchedCount/visibleCount/hint 返回与 strict 参数(多命中可见化契约)", () => {
+    for (const name of ["browser_click", "browser_type", "browser_press", "browser_select"]) {
+      const def = tools.get(name)!;
+      const outProps = (def.output.schema as any).properties;
+      expect(outProps.matchedCount?.type, `${name}.matchedCount`).toBe("integer");
+      expect(outProps.visibleCount?.type, `${name}.visibleCount`).toBe("integer");
+      expect(outProps.hint?.type, `${name}.hint`).toBe("string");
+      const paramProps = (def.parameters as any).properties;
+      expect(paramProps.strict?.type, `${name}.strict 参数`).toBe("boolean");
+    }
+  });
 });
 
 describe("browser_network 返回值契约", () => {

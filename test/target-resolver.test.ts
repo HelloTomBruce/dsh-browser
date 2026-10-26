@@ -153,3 +153,76 @@ describe("统一目标解析器 (Target Resolution Pipeline)", () => {
     expect(res.visibleCount).toBe(1);
   });
 });
+
+describe("定位参数互斥硬校验(ref/mark/what/selector 四选一)", () => {
+  it("selector + what 同时传 → 报冲突并教学 what+scope 写法", async () => {
+    const mockPage = {} as Page;
+    await expect(
+      resolveTargetLocator(mockPage, { selector: "[data-dsh-src='#modal']", what: "重 置" }),
+    ).rejects.toThrow(/定位参数冲突.*what 与 selector.*what \+ scope/s);
+  });
+
+  it("两两冲突组合:selector+ref / ref+what / what+mark / selector+mark", async () => {
+    const mockPage = {} as Page;
+    await expect(resolveTargetLocator(mockPage, { selector: "#a", ref: "e1" })).rejects.toThrow(/定位参数冲突/);
+    await expect(resolveTargetLocator(mockPage, { ref: "e1", what: "登录" })).rejects.toThrow(/定位参数冲突/);
+    await expect(resolveTargetLocator(mockPage, { what: "登录", mark: 3 })).rejects.toThrow(/定位参数冲突/);
+    await expect(resolveTargetLocator(mockPage, { selector: "#a", mark: 3 })).rejects.toThrow(/定位参数冲突/);
+  });
+
+  it("三个定位参数同时传 → 报冲突并列出全部", async () => {
+    const mockPage = {} as Page;
+    await expect(resolveTargetLocator(mockPage, { selector: "#a", ref: "e1", what: "登录" })).rejects.toThrow(
+      /ref 与 what 与 selector/,
+    );
+  });
+
+  it("row 管线豁免:row + selector 合法;row + what/ref 报冲突", async () => {
+    const rowTarget = { id: "row-target" };
+    const actionLoc: any = {
+      filter: vi.fn().mockReturnThis(),
+      first: vi.fn().mockReturnValue(rowTarget),
+    };
+    const filteredRow: any = {
+      locator: vi.fn().mockReturnValue(actionLoc),
+    };
+    const rowLoc: any = {
+      filter: vi.fn().mockReturnValue(filteredRow),
+    };
+    const mockPage = {
+      locator: vi.fn().mockReturnValue(rowLoc),
+    } as unknown as Page;
+    const res = await resolveTargetLocator(mockPage, { row: "TASK-1002", action: "编辑", selector: "button.edit" });
+    expect(res.locator).toBe(rowTarget);
+
+    await expect(resolveTargetLocator(mockPage, { row: "TASK-1002", what: "编辑" })).rejects.toThrow(
+      /row\/rowText 与 what/,
+    );
+    await expect(resolveTargetLocator(mockPage, { rowText: "TASK-1002", ref: "e1" })).rejects.toThrow(
+      /row\/rowText 与 ref/,
+    );
+  });
+
+  it("what + scope 合法组合不受互斥影响", async () => {
+    // scope 不是定位参数,与 what 组合是容器内语义定位的正统写法;走到语义扫描
+    // 即可(mock page.evaluate 返回零命中,证明通过了互斥校验进入 what 分支)
+    const mockPage = {
+      evaluate: vi.fn().mockResolvedValue({ matches: [], candidates: [], scanned: 0 }),
+      getByRole: vi.fn().mockReturnValue({
+        count: vi.fn().mockResolvedValue(0),
+        first: vi.fn().mockReturnThis(),
+      }),
+      locator: vi.fn().mockReturnThis(),
+    } as unknown as Page;
+    await expect(resolveTargetLocator(mockPage, { what: "重置", scope: "#modal" })).rejects.toThrow(
+      /语义定位未命中/,
+    );
+  });
+
+  it("单一参数与空串 what 不受影响", async () => {
+    const mockLocator = { first: () => "solo" } as unknown as Locator;
+    const mockPage = { locator: vi.fn().mockReturnValue(mockLocator) } as unknown as Page;
+    const res = await resolveTargetLocator(mockPage, { selector: "#only", what: "" });
+    expect(res.locator).toBe("solo");
+  });
+});

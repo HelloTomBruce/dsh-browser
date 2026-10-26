@@ -368,9 +368,12 @@ export async function launchProfile(name: string, config: BrowserConfig): Promis
           ...options,
           headless: resolved.headless ?? false,
         });
-        for (const existing of context.pages()) {
-          existing.close().catch(() => {});
-        }
+        // 会话恢复的残留标签(如上次会话的登录页)关闭需 await(3s 上限):
+        // fire-and-forget 失败时会漏成游离僵尸标签
+        await Promise.race([
+          Promise.all(context.pages().map((p) => p.close().catch(() => {}))),
+          new Promise((r) => setTimeout(r, 3_000)),
+        ]);
         state.browser = null;
         state.context = context;
         state.persistent = true;
@@ -417,11 +420,34 @@ export function namedContextsOf(): Map<string, NamedContext> {
   return namedContexts;
 }
 
-/** 把一个已 attach 的页面注册进 profile 标签表并激活,返回分配的 tab id。 */
+/** 同步摘除已关闭页面(手动关标签/渲染崩溃的僵尸句柄)。
+ * activeId 指向被摘页时置 null 而非自动迁移——静默换页对 click/type 是错页执行,
+ * 由 getPage 报错引导显式恢复(switch / browser_open 自愈)。 */
+function pruneClosedPages(state: ProfileState): void {
+  for (const [id, page] of state.pages) {
+    if (page.isClosed()) {
+      state.pages.delete(id);
+      state.tabMeta?.delete(id);
+      if (state.activeId === id) state.activeId = null;
+    }
+  }
+}
+
+/** 把一个已 attach 的页面注册进 profile 标签表并激活,返回分配的 tab id。
+ * 唯一注册路径:同时挂 close 监听幂等摘除外部关闭的页(否则僵尸句柄会永久占用
+ * activeId,所有工具连报 "Target page...closed" 而 tabs list 仍显示存活)。 */
 export function registerTabPage(state: ProfileState, page: Page): number {
   const id = state.counter++;
   state.pages.set(id, page);
   state.activeId = id;
+  (state.tabMeta ??= new Map()).set(id, { createdAt: Date.now() });
+  page.on("close", () => {
+    // 幂等:tabs close 等路径已手动删除时直接跳过,防双写竞态
+    if (!state.pages.has(id)) return;
+    state.pages.delete(id);
+    state.tabMeta?.delete(id);
+    if (state.activeId === id) state.activeId = null;
+  });
   return id;
 }
 
@@ -449,26 +475,35 @@ export async function newPage(config: BrowserConfig): Promise<Page> {
 export async function getPage(config: BrowserConfig): Promise<Page> {
   const state = stateOf();
   if (state.browser === null && state.context === null) await launchProfile(currentProfile, config);
+  pruneClosedPages(state);
   if (state.pages.size === 0) {
     const page = await newPage(config);
-    const id = state.counter++;
-    state.pages.set(id, page);
-    state.activeId = id;
+    registerTabPage(state, page);
+    return page;
   }
   const page = state.pages.get(state.activeId ?? -1);
-  if (page === undefined) throw new Error("dsh-browser: no active page");
+  if (page === undefined) {
+    // 活动标签已死而其他页存活:报错引导,不静默换目标(换页操作对 click/type 是错页执行)
+    const err = new Error(
+      'dsh-browser: 活动标签已关闭或崩溃;请 browser_tabs { action: "list" } 查看存活标签并 switch,或 browser_open 打开目标 URL(将自动新建标签)',
+    );
+    (err as any).code = "activeTabClosed";
+    throw err;
+  }
   return page;
 }
 
 /** 活动页面(可能为 null,不触发启动)。 */
 export function activePage(): Page | null {
   const state = stateOf();
+  pruneClosedPages(state);
   return state.pages.get(state.activeId ?? -1) ?? null;
 }
 
-/** 投影当前 profile 的标签列表。 */
+/** 投影当前 profile 的标签列表(先摘除僵尸页,附注册时间)。 */
 export async function tabList() {
   const state = stateOf();
+  pruneClosedPages(state);
   const tabs = [];
   for (const [id, page] of state.pages) {
     let title = "";
@@ -477,7 +512,8 @@ export async function tabList() {
     } catch {
       /* closed */
     }
-    tabs.push({ id, url: page.url(), title });
+    const createdAt = state.tabMeta?.get(id)?.createdAt;
+    tabs.push({ id, url: page.url(), title, ...(createdAt !== undefined ? { createdAt } : {}) });
   }
   return tabs;
 }
@@ -490,6 +526,7 @@ export async function closeBrowser(): Promise<void> {
     state.browser = null;
     state.context = null;
     state.pages = new Map();
+    state.tabMeta?.clear();
     state.activeId = null;
     state.counter = 0;
     try {

@@ -11,7 +11,7 @@ import {
 import { workspaceBaseDir } from "../../lib/tools.js";
 import { safeName as sanitizeName } from "../recordings.js";
 import { targetLocator } from "./interaction.js";
-import { pngSize, scaleRects } from "./common.js";
+import { lcsScore, pngSize, scaleRects } from "./common.js";
 
 export async function waitTool(config: BrowserConfig, args: Record<string, any>) {
   const page = await getPage(config);
@@ -23,12 +23,13 @@ export async function waitTool(config: BrowserConfig, args: Record<string, any>)
 /**
  * 条件检查引擎(测试原语共用)。
  *
- * cond 支持四类(每类内部互斥,取第一个存在的字段):
+ * cond 支持六类(每类内部互斥,取第一个存在的字段):
  *   { selector: "#btn", state: "visible|hidden|attached|detached" }  元素状态(默认 visible)
  *   { url: "正则字符串" }                                            当前 URL 匹配
  *   { text: "子串" }                                                  body 可见文本包含
  *   { count: { selector, op: "eq|gt|gte|lt|lte", value: n } }         元素数量比较
  *   { eval: "JS 表达式" }                                            表达式求值 truthy
+ *   { bridge: { method, args?, expect?/expectContains? } }           页内调用 __DSH_BRIDGE__ 方法并断言返回
  */
 export type TestCondition = Record<string, any>;
 
@@ -112,7 +113,51 @@ export async function checkOnce(page: Page, cond: TestCondition): Promise<{ ok: 
       return { ok: false, detail: `eval 执行失败: ${e instanceof Error ? e.message : String(e)}` };
     }
   }
-  throw new Error("条件无效: 需要 selector/url/text/count/eval 之一");
+  if (cond.bridge !== undefined && typeof cond.bridge === "object") {
+    // bridge 条件:调用页面 __DSH_BRIDGE__(vite-plugin-dsh-bridge)方法并断言返回,
+    // 把"桥取数"接入宿主的结构化断言/等待(失败自动截图留证)。判定收窄为最小集:
+    // 缺省 expect → truthy;expect → JSON 深比较;字符串结果另支持 expectContains。
+    const spec = cond.bridge as { method?: string; args?: unknown[]; expect?: unknown; expectContains?: string };
+    const method = String(spec.method ?? "");
+    const trunc = (v: unknown) => {
+      const s = JSON.stringify(v) ?? String(v);
+      return s.length > 500 ? `${s.slice(0, 500)}…(截断)` : s;
+    };
+    if (method === "") return { ok: false, detail: "bridge 条件需要 method(__DSH_BRIDGE__ 方法名)" };
+    try {
+      const value = await page.evaluate(
+        async (payload: { method: string; args: unknown[] }) => {
+          const bridge = (window as any).__DSH_BRIDGE__;
+          if (bridge === undefined || bridge === null) {
+            throw new Error("NO_BRIDGE:页面无 __DSH_BRIDGE__(未接入 vite-plugin-dsh-bridge?)");
+          }
+          if (typeof bridge[payload.method] !== "function") {
+            throw new Error(`NO_BRIDGE:__DSH_BRIDGE__ 无方法 ${payload.method}`);
+          }
+          return await bridge[payload.method](...payload.args);
+        },
+        { method, args: Array.isArray(spec.args) ? spec.args : [] },
+      );
+      const actual: unknown = JSON.parse(JSON.stringify(value ?? null));
+      if (spec.expectContains !== undefined) {
+        const hay = typeof actual === "string" ? actual : JSON.stringify(actual);
+        return hay.includes(String(spec.expectContains))
+          ? { ok: true }
+          : { ok: false, detail: `[bridge] ${method}() 结果不含 "${spec.expectContains}"(实际: ${trunc(actual)})` };
+      }
+      if (spec.expect !== undefined) {
+        return JSON.stringify(actual) === JSON.stringify(spec.expect)
+          ? { ok: true }
+          : { ok: false, detail: `[bridge] ${method}() = ${trunc(actual)} ≠ 期望 ${trunc(spec.expect)}` };
+      }
+      return actual ? { ok: true } : { ok: false, detail: `[bridge] ${method}() 返回假值: ${trunc(actual)}` };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.startsWith("NO_BRIDGE:")) return { ok: false, detail: `[bridge] ${msg.slice("NO_BRIDGE:".length)}` };
+      return { ok: false, detail: `[bridge] ${method}() 执行失败: ${msg}` };
+    }
+  }
+  throw new Error("条件无效: 需要 selector/url/text/count/eval/bridge 之一");
 }
 
 /** 轮询等待条件成立(intervalMs 步进),返回最后一次检查结果。 */
@@ -349,11 +394,31 @@ async function visualAssert(
 }
 
 function matchNetwork(entry: { url: string; method: string; status?: number; ok?: boolean; failed?: boolean }, f: Record<string, any>): boolean {
-  if (f.urlSubstr && !entry.url.includes(String(f.urlSubstr))) return false;
+  // 大小写不敏感:camelCase 接口名(如 baseStationEffRule)用小写子串也能命中,
+  // 防止精确匹配扑空误判"接口未调用"
+  if (f.urlSubstr && !entry.url.toLowerCase().includes(String(f.urlSubstr).toLowerCase())) return false;
   if (f.method && entry.method.toUpperCase() !== String(f.method).toUpperCase()) return false;
   if (f.status !== undefined && Number(f.status) !== entry.status) return false;
   if (f.failedOnly === true && !entry.failed && (entry.status === undefined || entry.status < 400)) return false;
   return true;
+}
+
+/** urlSubstr 零命中时的相近 URL 候选(top5,去重,LCS 打分),与 what 未命中的
+ * 候选体验对齐——把"子串写错"与"接口没调"区分开。 */
+function urlSuggestions(entries: { url: string }[], substr: string): string[] {
+  const min = substr.trim().length <= 3 ? 1 : 2;
+  const seen = new Set<string>();
+  const scored: { url: string; score: number }[] = [];
+  for (const e of entries) {
+    if (seen.has(e.url)) continue;
+    seen.add(e.url);
+    scored.push({ url: e.url, score: lcsScore(substr, e.url) });
+  }
+  return scored
+    .filter((s) => s.score >= min)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5)
+    .map((s) => s.url);
 }
 
 /** 网络记录查询:list / failed / wait / clear。兼容 (args) 与 (config, args) 两种调用签名。 */
@@ -429,7 +494,13 @@ export async function networkTool(configOrArgs?: Record<string, any>, maybeArgs?
       .sort((a, b) => b.total - a.total);
     return { stats };
   }
-  if (action === "failed") return { failed: list };
-  if (action === "list") return { entries: list };
+  if (action === "failed") {
+    const suggestions = list.length === 0 && args.urlSubstr ? urlSuggestions(entries, String(args.urlSubstr)) : [];
+    return suggestions.length > 0 ? { failed: list, suggestions } : { failed: list };
+  }
+  if (action === "list") {
+    const suggestions = list.length === 0 && args.urlSubstr ? urlSuggestions(entries, String(args.urlSubstr)) : [];
+    return suggestions.length > 0 ? { entries: list, suggestions } : { entries: list };
+  }
   throw new Error(`unknown network action: ${action}`);
 }
