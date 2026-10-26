@@ -35,11 +35,74 @@ export async function executeUniversalSelect(ctx: SelectContext): Promise<Select
     }
   }
 
-  // 2. 规范化 target: 若定位到的是组件内部 input 或 search 节点，自动向上提升到 combobox 外层宿主
-  const hostLocator = target.locator(
+  // 2. 规范化 target:
+  // a) 若定位到的是 label 或 form-item 容器、前置文本 span/td 等，下钻或寻获关联的下拉组件
+  let resolvedTarget = target;
+  const isLabelOrContainer = await withTimeout(
+    target.evaluate((el) => {
+      const tag = el.tagName.toLowerCase();
+      if (tag === "label") return true;
+      const cls = typeof el.className === "string" ? el.className : "";
+      if (/(?:form-item|form__item|form-group)/i.test(cls)) return true;
+      if (el.closest("label, [class*='form-item'], [class*='form__item'], [class*='form-group']")) {
+        return !el.matches("[role='combobox'], select, [class*='select-selector']");
+      }
+      // 非标文本节点 (如 span/div/td/th)
+      if (!el.matches("[role='combobox'], select, [class*='select'], [class*='selector']")) {
+        return true;
+      }
+      return false;
+    }),
+    1_500,
+    "探测 label 或非标文本容器",
+  ).catch(() => false);
+
+  if (isLabelOrContainer) {
+    const descendantSelect = target.locator(
+      "xpath=.//*[@role='combobox' or self::select or contains(@class, 'select-selector') or contains(@class, 'select')][not(self::label)]",
+    ).first();
+    if ((await descendantSelect.count().catch(() => 0)) > 0) {
+      resolvedTarget = descendantSelect;
+    } else {
+      const forId = await target.getAttribute("for").catch(() => null);
+      if (forId) {
+        const forTarget = page.locator(`[id="${forId.replace(/"/g, '\\"')}"]`).first();
+        if ((await forTarget.count().catch(() => 0)) > 0) {
+          resolvedTarget = forTarget;
+        }
+      } else {
+        // 尝试 1: 后续相邻兄弟组件 (<span>地市:</span> <a-select ...>)
+        const nextSiblingSelect = target.locator(
+          "xpath=following-sibling::*[self::select or @role='combobox' or contains(@class, 'select') or contains(@class, 'selector')][1] | following-sibling::*[1]//*[@role='combobox' or self::select or contains(@class, 'select')]",
+        ).first();
+        if ((await nextSiblingSelect.count().catch(() => 0)) > 0) {
+          resolvedTarget = nextSiblingSelect;
+        } else {
+          // 尝试 2: 表格相邻单元格 (<td>地市</td> <td><select>...</td>)
+          const tdSiblingSelect = target.locator(
+            "xpath=ancestor-or-self::td[1]/following-sibling::td[1]//*[@role='combobox' or self::select or contains(@class, 'select')]",
+          ).first();
+          if ((await tdSiblingSelect.count().catch(() => 0)) > 0) {
+            resolvedTarget = tdSiblingSelect;
+          } else {
+            // 尝试 3: 同一表单项容器或父容器兄弟控件
+            const siblingSelect = target.locator(
+              "xpath=ancestor-or-self::*[contains(@class, 'form-item') or contains(@class, 'form__item') or contains(@class, 'form-group')][1]//*[@role='combobox' or self::select or contains(@class, 'select-selector') or contains(@class, 'select')][not(self::label)] | ..//*[@role='combobox' or self::select or contains(@class, 'select-selector') or contains(@class, 'select')][not(self::label)]",
+            ).first();
+            if ((await siblingSelect.count().catch(() => 0)) > 0) {
+              resolvedTarget = siblingSelect;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // b) 若定位到的是组件内部 input 或 search 节点，自动向上提升到 combobox 外层宿主
+  const hostLocator = resolvedTarget.locator(
     "xpath=ancestor-or-self::*[@role='combobox' or contains(@class, 'select') or contains(@class, 'selector')][last()]",
   );
-  const actualTarget = (await hostLocator.count().catch(() => 0)) > 0 ? hostLocator.first() : target;
+  const actualTarget = (await hostLocator.count().catch(() => 0)) > 0 ? hostLocator.first() : resolvedTarget;
 
   // 3. 多选清理支持 (当指定 clear: true 时先清除已有选中标签)
   if (clear) {
@@ -124,16 +187,23 @@ export async function executeUniversalSelect(ctx: SelectContext): Promise<Select
     "[role='listbox']:not([style*='display: none']), [class*='select-dropdown']:not([style*='display: none']):not([class*='hidden']), [class*='popper']:not([style*='display: none'])";
 
   let options: Locator;
+  let targetDropdown: Locator | null = null;
   if (controlsId) {
     const parentDropdown = page.locator(
       `xpath=//*[@id='${controlsId}']/ancestor-or-self::*[contains(@class, 'dropdown') or contains(@class, 'popper') or @role='listbox'][1] | //*[contains(@class, 'dropdown') or @role='listbox'][.//*[@id='${controlsId}']]`,
     );
+    targetDropdown = parentDropdown.first();
     const visual = parentDropdown.locator(optionSelector).locator("visible=true");
     options = (await visual.count().catch(() => 0)) > 0 ? visual : parentDropdown.locator(optionSelector);
   } else {
-    const activeDropdowns = page.locator(dropdownSelector);
-    const count = await activeDropdowns.count().catch(() => 0);
-    const dropdown = count > 1 ? activeDropdowns.last() : activeDropdowns.first();
+    const activeVisualDropdowns = page.locator(dropdownSelector).locator("visible=true");
+    const visualCount = await activeVisualDropdowns.count().catch(() => 0);
+    const dropdown = visualCount > 1
+      ? activeVisualDropdowns.last()
+      : visualCount === 1
+        ? activeVisualDropdowns.first()
+        : page.locator(dropdownSelector).last();
+    targetDropdown = dropdown;
     const visual = dropdown.locator(optionSelector).locator("visible=true");
     options = (await visual.count().catch(() => 0)) > 0 ? visual : dropdown.locator(optionSelector);
   }
@@ -158,7 +228,9 @@ export async function executeUniversalSelect(ctx: SelectContext): Promise<Select
   // 8. 空数据诊断与安全收起 (严禁使用全局 Escape 避免误关外层弹窗)
   if (visibleTexts.length === 0) {
     const emptySelector = "[class*='empty'], [class*='no-data'], [role='status'], [class*='item-empty']";
-    const isEmpty = await page.locator(emptySelector).first().isVisible().catch(() => false);
+    const isEmpty = targetDropdown !== null
+      ? await targetDropdown.locator(emptySelector).first().isVisible().catch(() => false)
+      : false;
     await actualTarget.click({ timeout: 1000 }).catch(() => {});
     if (isEmpty) {
       throw new Error(`下拉浮层当前无选项(数据为空态/无可选数据): ${label}`);

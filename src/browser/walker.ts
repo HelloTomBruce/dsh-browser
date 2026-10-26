@@ -102,23 +102,53 @@ function __walkerCore() {
     if (el.id) {
       const lab = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
       const t = lab?.textContent?.trim();
-      if (t) return t.slice(0, 60);
+      if (t) return t.replace(/^[*：:\s]+|[*：:\s]+$/g, "").slice(0, 60);
     }
     const wrapLabel = el.closest("label");
     if (wrapLabel) {
       const t = wrapLabel.textContent?.trim();
-      if (t) return t.slice(0, 60);
+      if (t) return t.replace(/^[*：:\s]+|[*：:\s]+$/g, "").slice(0, 60);
     }
     if (["checkbox", "radio", "switch"].includes(role)) {
       const container = el.closest("label, [class*='wrapper'], [class*='item'], li");
       if (container) {
         const t = container.textContent?.trim();
-        if (t) return t.replace(/\s+/g, " ").slice(0, 60);
+        if (t) return t.replace(/\s+/g, " ").replace(/^[*：:\s]+|[*：:\s]+$/g, "").slice(0, 60);
       }
     }
-    if (["textbox", "searchbox", "combobox", "spinbutton"].includes(role)) {
+    if (["textbox", "searchbox", "combobox", "spinbutton", "slider", "listbox"].includes(role)) {
+      const formItem = el.closest("[class*='form-item'], [class*='form__item'], [class*='form-group'], [role='group']");
+      if (formItem) {
+        const lab = formItem.querySelector("label, [class*='form-item-label'], [class*='form-item__label'], [class*='label']");
+        if (lab) {
+          const title = lab.getAttribute("title");
+          const t = (title || lab.textContent || "").trim().replace(/^[*：:\s]+|[*：:\s]+$/g, "");
+          if (t) return t.slice(0, 60);
+        }
+      }
+      const selectHost = el.closest("[class*='select'], [class*='cascader'], [class*='picker']");
+      if (selectHost) {
+        const ph = selectHost.querySelector("[class*='placeholder'], [class*='selection-placeholder']")?.textContent?.trim();
+        if (ph) return ph.slice(0, 60);
+        const selVal = selectHost.querySelector("[class*='selection-item'], [class*='selected-value']")?.textContent?.trim();
+        if (selVal) return selVal.slice(0, 60);
+      }
       const ph = el.getAttribute("placeholder");
       if (ph && ph.trim()) return ph.trim().slice(0, 60);
+
+      // 非标容器场景 1: 前置兄弟元素 (如 <span>地市:</span> <a-select ...> 或 <div class="addon">地市</div>)
+      const host = selectHost || el;
+      const prevEl = host.previousElementSibling;
+      if (prevEl) {
+        const prevText = (prevEl.textContent || "").trim().replace(/^[*：:\s]+|[*：:\s]+$/g, "");
+        if (prevText && prevText.length <= 30) return prevText.slice(0, 60);
+      }
+      // 非标容器场景 2: 表格键值对 <td>地市</td> <td><select>...</td>
+      const td = host.closest("td");
+      if (td && td.previousElementSibling) {
+        const tdText = (td.previousElementSibling.textContent || "").trim().replace(/^[*：:\s]+|[*：:\s]+$/g, "");
+        if (tdText && tdText.length <= 30) return tdText.slice(0, 60);
+      }
     }
     const text = ((el as HTMLElement).innerText || el.textContent || "").trim().replace(/\s+/g, " ");
     if (text) return text.slice(0, 60);

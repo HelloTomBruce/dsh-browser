@@ -51,7 +51,7 @@ export interface SemanticMiss {
  * 多 token(空格/中英混排拆分)按 AND 命中 —— 单 token 行为与旧子串匹配等价。
  */
 export const scanInteractive = injectWalker<
-  { query: string; exact: boolean; scope: string; limit: number; dialogSelector?: string },
+  { query: string; exact: boolean; scope: string; limit: number; dialogSelector?: string; preferredRoles?: string[] },
   { matches: SemanticMatch[]; candidates: { role: string; name: string; selector: string }[]; scanned: number }
 >((payload, w) => {
   const { INTERACTIVE, STRUCTURAL, SKIP_TAGS, roleOf, nameOf, cssPath, isVisible, deepChildren, composedParent, isProbablyClickable } = w;
@@ -155,6 +155,7 @@ export const scanInteractive = injectWalker<
       }
       const hit = payload.exact ? legacyHit : legacyHit || (tokens.length > 0 && tokenHit);
       if (legacyHit && name !== "" && name.toLowerCase() === q) score += 50; // 全名精确最强
+      if (payload.preferredRoles && payload.preferredRoles.includes(role)) score += 40; // 交互工具角色偏好加权
 
       scanned += 1;
       if (name !== "" && candidates.length < 50) candidates.push({ role, name, selector: cssPath(el) });
@@ -251,7 +252,7 @@ export function semanticMissMessage(miss: SemanticMiss): string {
 export async function resolveSemanticTarget(
   page: Page,
   what: string,
-  opts: { exact?: boolean; scope?: string; limit?: number; maxRefs?: number } = {},
+  opts: { exact?: boolean; scope?: string; limit?: number; maxRefs?: number; preferredRoles?: string[] } = {},
 ): Promise<TargetResolution | SemanticMiss> {
   const query = what.trim();
   if (query === "") return { what: "", candidates: [] };
@@ -263,6 +264,7 @@ export async function resolveSemanticTarget(
       scope: typeof opts.scope === "string" && opts.scope !== "" ? opts.scope : "",
       limit: Math.min(Math.max(opts.limit ?? 5, 1), 20),
       dialogSelector: ACTIVE_DIALOG_SELECTORS,
+      preferredRoles: opts.preferredRoles,
     });
   } catch {
     return { what: query, candidates: [] };

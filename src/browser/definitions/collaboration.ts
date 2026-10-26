@@ -13,10 +13,11 @@ export function getCollaborationTools(
     definePlainTool({
       name: "browser_wait_for_login",
       description:
-        "等待人工登录完成。agent 在登录页调用本工具后,提示用户在浏览器窗口中完成登录(有头模式 headless:false 时用户可直接操作;配 userDataDir 登录态会持久化)。成功条件三选一:successSelector(登录后出现的元素,如 '#avatar')或 successUrl(登录后 URL 正则,如 'https://\\\\.app\\\\.example\\\\.com')都不给则 URL 发生变化即视为完成。轮询间隔 2 秒,超时返回 loggedIn:false。",
+        "等待人工登录完成。agent 在登录页调用本工具后,提示用户在浏览器窗口中完成登录(有头模式 headless:false 时用户可直接操作;配 userDataDir 登录态会持久化)。支持 instruction 提示语(将显示在右下角实时画面面板);成功条件:优先取 successSelector(登录后出现的元素,如 '#avatar')或 successUrl(登录后 URL 正则);两者未指定时,结合 URL 变化、登录特征消除(密码框等)与页面签名稳态综合判定。轮询间隔 2 秒,超时返回 loggedIn:false(附 waitedMs 与 detail)。",
       parameters: {
         type: "object",
         properties: {
+          instruction: { type: "string", description: "可选:给用户看的提示说明(默认「请在浏览器窗口中完成登录」)。" },
           timeoutMs: { type: "integer", description: "等待上限(毫秒,默认 120000,上限 600000)。" },
           successSelector: { type: "string", description: "登录成功后应出现的 CSS 选择器。" },
           successUrl: { type: "string", description: "登录成功后 URL 应匹配的正则。" },
@@ -28,10 +29,12 @@ export function getCollaborationTools(
         additionalProperties: false,
         properties: {
           loggedIn: { type: "boolean" },
+          waitedMs: { type: "integer" },
+          detail: { type: "string" },
           url: { type: "string" },
           title: { type: "string" },
         },
-        required: ["loggedIn", "url", "title"],
+        required: ["loggedIn", "waitedMs", "detail", "url", "title"],
       },
       render: (_args, value) =>
         value.loggedIn ? `登录完成: ${value.url}` : `等待登录超时,仍在: ${value.url}`,

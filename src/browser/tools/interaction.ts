@@ -245,7 +245,7 @@ export async function clickTool(config: BrowserConfig, args: Record<string, any>
 
 export async function typeTool(config: BrowserConfig, args: Record<string, any>) {
   const page = await getPage(config);
-  const targetRes = await resolveTargetLocator(page, args);
+  const targetRes = await resolveTargetLocator(page, args, { preferredRoles: ["textbox", "searchbox", "spinbutton"] });
   const target = targetRes.locator;
   const strictErr = strictReject(args, targetRes);
   if (strictErr !== null) throw strictErr;
@@ -378,7 +378,7 @@ export async function pressTool(config: BrowserConfig, args: Record<string, any>
  */
 export async function selectTool(config: BrowserConfig, args: Record<string, any>) {
   const page = await getPage(config);
-  const targetRes = await resolveTargetLocator(page, args);
+  const targetRes = await resolveTargetLocator(page, args, { preferredRoles: ["combobox", "select", "listbox"] });
   const target = targetRes.locator;
   const strictErr = strictReject(args, targetRes);
   if (strictErr !== null) throw strictErr;

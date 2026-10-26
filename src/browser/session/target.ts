@@ -92,6 +92,7 @@ function nameSimilar(a: string, b: string): boolean {
 export async function resolveTargetLocator(
   page: Page,
   args: Record<string, any>,
+  opts: { preferredRoles?: string[] } = {},
 ): Promise<TargetResolution> {
   // 定位参数互斥硬校验:ref/mark/what/selector 四选一。历史上按
   // ref > mark > row > what > selector 静默择一,what 被无声丢弃后报错只字未提,
@@ -364,6 +365,7 @@ export async function resolveTargetLocator(
   if (typeof what === "string" && what.trim() !== "" && args.selector === undefined && args.ref === undefined && args.mark === undefined && rowPattern === undefined) {
     const res = await resolveSemanticTarget(page, what, {
       scope: typeof args.scope === "string" && args.scope !== "" ? args.scope : undefined,
+      preferredRoles: opts.preferredRoles,
     });
     if (!("candidates" in res)) return res;
     // 二次兜底:walker role 推断失灵的自定义组件,按常见 role + 弹性文本尝试

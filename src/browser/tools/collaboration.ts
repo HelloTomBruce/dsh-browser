@@ -7,6 +7,7 @@ import {
   setPendingConfirm, getPendingConfirm, clearPendingConfirm,
   setPendingPick, getPendingPick, clearPendingPick,
   pageRefsOf, setPageRefs, assignRefs,
+  stateOf, registerTabPage, attachPage, profileConfig, currentProfile,
 } from "../session.js";
 import { screencastManager } from "../session/screencast.js";
 import { injectWalker } from "../walker.js";
@@ -70,27 +71,245 @@ export function previewHighlight(page: Page | null, selector: string, label: str
 }
 
 /**
+ * 常见认证/登录相关的 URL 特征正则，用于防止跳板页提前误判。
+ */
+export const AUTH_URL_PATTERN =
+  /login|signin|sign-in|oauth|passport|sso|cas|challenge|captcha|verify|auth\b/i;
+
+export interface WaitForLoginResult {
+  loggedIn: boolean;
+  waitedMs: number;
+  detail: string;
+  targetPage: Page;
+}
+
+/**
+ * 等待人工登录底层执行(独立导出供测试注入 fake page)。
+ * 协同机制:
+ * 1. 挂起等待期间置入 instruction 至实时画面面板(setPauseInstruction),结束后统一清理;
+ * 2. 存活标签感知:感知 context 内所有存活页面,原标签关闭时自动迁移至存活页,新标签出现时通知外层注册;
+ * 3. 稳态判定:
+ *    - 显式 successSelector / successUrl 优先;
+ *    - 缺省时,检测 URL 离开登录页(非 AUTH_URL_PATTERN)、登录密码框消除、或 SPA 内容签名稳态变化,防范跳板页误判与 SPA 弹窗漏判。
+ */
+export async function runWaitForLoginOnPage(
+  initialPage: Page,
+  args: Record<string, any>,
+  onNewPageDetected?: (page: Page) => void,
+): Promise<WaitForLoginResult> {
+  const instruction =
+    typeof args.instruction === "string" && args.instruction.trim()
+      ? args.instruction.trim()
+      : "请在浏览器窗口中完成登录";
+  const timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? 120_000) || 120_000, 1_000), 600_000);
+  const pollIntervalMs = Math.min(Math.max(Number(args.pollIntervalMs ?? 2_000) || 2_000, 100), 5_000);
+
+  let currentPage = initialPage;
+  let startUrl = "";
+  try {
+    startUrl = initialPage.url();
+  } catch {
+    /* 页面可能刚初始化或已关闭 */
+  }
+
+  const checkHasPassword = async (p: Page): Promise<boolean> => {
+    try {
+      return await p.evaluate(() => !!document.querySelector('input[type="password"]'));
+    } catch {
+      return false;
+    }
+  };
+
+  const getPageSig = async (p: Page): Promise<string> => {
+    try {
+      return await p.evaluate(() => {
+        const body = document.body;
+        return `${location.href}|${body ? body.innerText.length : 0}|${document.querySelectorAll("input,button,a").length}`;
+      });
+    } catch {
+      try {
+        return p.url();
+      } catch {
+        return "";
+      }
+    }
+  };
+
+  const startHasPassword = await checkHasPassword(initialPage);
+  const startSig = args.successSelector || args.successUrl ? "" : await getPageSig(initialPage);
+
+  const startedAt = Date.now();
+  let loggedIn = false;
+  let detail = `等待登录超时(${timeoutMs}ms)`;
+
+  setPauseInstruction(instruction);
+  try {
+    const deadline = startedAt + timeoutMs;
+    while (Date.now() < deadline) {
+      // 1. 存活页面探测与自愈
+      let candidatePages: Page[] = [];
+      try {
+        const context = typeof currentPage.context === "function" ? currentPage.context() : null;
+        if (context && typeof context.pages === "function") {
+          candidatePages = context.pages().filter((p) => {
+            try {
+              return !p.isClosed();
+            } catch {
+              return false;
+            }
+          });
+        }
+      } catch {
+        /* context 获取失败 */
+      }
+
+      let isCurrentClosed = false;
+      try {
+        isCurrentClosed = currentPage.isClosed();
+      } catch {
+        isCurrentClosed = true;
+      }
+
+      if (candidatePages.length > 0) {
+        for (const p of candidatePages) {
+          if (p !== currentPage && onNewPageDetected) {
+            onNewPageDetected(p);
+          }
+        }
+        if (isCurrentClosed) {
+          currentPage = candidatePages[candidatePages.length - 1];
+          isCurrentClosed = false;
+        }
+      }
+
+      // 2. 条件判定
+      try {
+        if (args.successSelector) {
+          const targets = candidatePages.length > 0 ? candidatePages : isCurrentClosed ? [] : [currentPage];
+          for (const p of targets) {
+            try {
+              if (await p.locator(String(args.successSelector)).first().isVisible()) {
+                loggedIn = true;
+                currentPage = p;
+                detail = `命中 successSelector: ${args.successSelector}`;
+                break;
+              }
+            } catch {}
+          }
+        } else if (args.successUrl) {
+          const re = new RegExp(String(args.successUrl));
+          const targets = candidatePages.length > 0 ? candidatePages : isCurrentClosed ? [] : [currentPage];
+          for (const p of targets) {
+            try {
+              const u = p.url();
+              if (re.test(u)) {
+                loggedIn = true;
+                currentPage = p;
+                detail = `命中 successUrl: ${args.successUrl}`;
+                break;
+              }
+            } catch {}
+          }
+        } else {
+          // 缺省条件判定
+          const target = !isCurrentClosed ? currentPage : candidatePages[0];
+          if (target) {
+            let curUrl = "";
+            try {
+              curUrl = target.url();
+            } catch {}
+            if (curUrl && curUrl !== "about:blank") {
+              if (curUrl !== startUrl) {
+                // URL 发生变化
+                if (!AUTH_URL_PATTERN.test(curUrl)) {
+                  // 明确离开登录/鉴权相关页面
+                  loggedIn = true;
+                  currentPage = target;
+                  detail = `URL 离开登录页跳转至 ${curUrl}`;
+                } else {
+                  // 仍处于含 auth 特征的 URL(可能是中间跳板页/验证码页/错误重定向),
+                  // 若原页面有密码输入框而当前已消除,判定为表单完成
+                  const hasPwd = await checkHasPassword(target);
+                  if (startHasPassword && !hasPwd) {
+                    loggedIn = true;
+                    currentPage = target;
+                    detail = `登录密码输入框已消除，页面跳转至 ${curUrl}`;
+                  }
+                }
+              } else {
+                // URL 未发生变化(SPA 弹窗登录/局部渲染)
+                const hasPwd = await checkHasPassword(target);
+                if (startHasPassword && !hasPwd) {
+                  loggedIn = true;
+                  currentPage = target;
+                  detail = "登录密码输入框已消除(SPA 登录完成)";
+                } else {
+                  const curSig = await getPageSig(target);
+                  if (curSig !== startSig && (!startHasPassword || !hasPwd)) {
+                    loggedIn = true;
+                    currentPage = target;
+                    detail = "页面内容签名变更(SPA 登录完成)";
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        detail = `检查登录状态出错: ${e instanceof Error ? e.message : String(e)}`;
+      }
+
+      if (loggedIn) break;
+      try {
+        await currentPage.waitForTimeout(pollIntervalMs);
+      } catch {
+        await sleep(pollIntervalMs);
+      }
+    }
+  } finally {
+    clearPauseInstruction();
+  }
+
+  return {
+    loggedIn,
+    waitedMs: Date.now() - startedAt,
+    detail,
+    targetPage: currentPage,
+  };
+}
+
+/**
  * 等待人工登录完成(配合 headless:false 使用):agent 打开登录页后调用本工具,
- * 提示用户在浏览器窗口中完成登录(输入/扫码/双因素)。基于通用条件引擎:
- * successSelector / successUrl 指定完成条件,两者都不给则以 URL 跳转视为完成。
- * 超时返回 loggedIn:false(不抛错)。
+ * 提示用户在浏览器窗口中完成登录(输入/扫码/双因素)。支持 instruction 提示语
+ * 与右下角实时画面面板联动显示横幅,支持多标签感知与 SPA 签名自适应判定。
+ * 超时返回 loggedIn:false(附 waitedMs 与 detail,不抛错)。
  */
 export async function waitForLoginTool(config: BrowserConfig, args: Record<string, any>) {
   const page = await getPage(config);
-  const startUrl = page.url();
-  let condition: TestCondition;
-  if (args.successSelector) {
-    condition = { selector: String(args.successSelector), state: "visible" };
-  } else if (args.successUrl) {
-    condition = { url: String(args.successUrl) };
-  } else {
-    condition = {
-      eval: `location.href !== ${JSON.stringify(startUrl)} && location.href !== "about:blank"`,
-    };
+  const state = stateOf();
+  const result = await runWaitForLoginOnPage(page, args, (newPage) => {
+    if (![...state.pages.values()].includes(newPage)) {
+      attachPage(newPage, profileConfig(config, currentProfile));
+      registerTabPage(state, newPage);
+    }
+  });
+
+  if (result.targetPage !== page) {
+    for (const [id, p] of state.pages) {
+      if (p === result.targetPage) {
+        state.activeId = id;
+        break;
+      }
+    }
   }
-  const timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? 120_000) || 120_000, 5_000), 600_000);
-  const result = await pollCondition(page, condition, timeoutMs, 2_000);
-  return { loggedIn: result.ok, ...(await pageIdentity(page)) };
+
+  const identity = await pageIdentity(result.targetPage);
+  return {
+    loggedIn: result.loggedIn,
+    waitedMs: result.waitedMs,
+    detail: result.detail,
+    ...identity,
+  };
 }
 
 /**
