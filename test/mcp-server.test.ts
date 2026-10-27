@@ -13,6 +13,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createBrowserMcpServer } from "../src/mcp.js";
 import { BROWSER_CONFIG_SCHEMA, BROWSER_DEFAULT_CONFIG } from "../src/lib/schema.js";
 import { resolveConfig } from "../src/lib/config.js";
+import { setInteractivePanelPresent } from "../src/browser/session.js";
 import type { BrowserConfig } from "../src/browser/types.js";
 
 let homeDir: string;
@@ -26,6 +27,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+  setInteractivePanelPresent(true);
   if (previousDshHome === undefined) delete process.env.DSH_HOME;
   else process.env.DSH_HOME = previousDshHome;
   rmSync(homeDir, { recursive: true, force: true });
@@ -100,6 +102,39 @@ describe("MCP server (protocol-level)", () => {
       // statusTool 有自定义 render(人类可读文本);结构化数据走 structuredContent
       expect((result.structuredContent as { open?: boolean }).open).toBe(false);
       expect((result.content[0]?.text ?? "").length).toBeGreaterThan(0);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("tools/list:每个工具包含合规的 MCP 2025 annotations 注解", async () => {
+    const client = await connectClient(makeConfig());
+    try {
+      const { tools } = await client.listTools();
+      const statusTool = tools.find((t) => t.name === "browser_status");
+      const clickTool = tools.find((t) => t.name === "browser_click");
+      const confirmTool = tools.find((t) => t.name === "browser_confirm");
+
+      expect((statusTool as any)?.annotations?.readOnlyHint).toBe(true);
+      expect((statusTool as any)?.annotations?.idempotentHint).toBe(true);
+      expect((clickTool as any)?.annotations?.readOnlyHint).toBe(false);
+      expect((clickTool as any)?.annotations?.openWorldHint).toBe(true);
+      expect((confirmTool as any)?.annotations?.destructiveHint).toBe(true);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("tools/call browser_confirm:无前端面板时 Fast-fail 极速抛错拒绝", async () => {
+    const client = await connectClient(makeConfig());
+    try {
+      const result = (await client.callTool({
+        name: "browser_confirm",
+        arguments: { reason: "提交敏感数据" },
+      })) as { isError?: boolean; content: Array<{ type: string; text?: string }> };
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toMatch(/无前端面板支持人工审批.*fail-closed/);
     } finally {
       await client.close();
     }

@@ -21,6 +21,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
+    "dsh-browser-view": "./lib/mcp.js",
     "dsh-browser-mcp": "./lib/mcp.js"
   },
   "files": [

@@ -182,6 +182,35 @@ async function main() {
       return `快照 ${text.length} 字,含 shadow 内按钮文本「Shadow 提交」`;
     });
 
+    await runStep("tools/call browser_screenshot(多模态 ImageContent 返回)", async () => {
+      const result = await client.request("tools/call", {
+        name: "browser_screenshot",
+        arguments: { name: "mcp-e2e-snap" },
+      });
+      if (result.isError) throw new Error(result.content?.[0]?.text ?? "browser_screenshot 失败");
+      const imgContent = result.content?.find((c: any) => c.type === "image");
+      if (!imgContent || typeof imgContent.data !== "string" || imgContent.data.length < 100) {
+        throw new Error("browser_screenshot 未在 MCP content 中正确返回 ImageContent(base64)");
+      }
+      if (imgContent.mimeType !== "image/png") {
+        throw new Error(`mimeType 应为 image/png,实际为 ${imgContent.mimeType}`);
+      }
+      return `收到 base64 图片(${imgContent.data.length} 字符, mime=${imgContent.mimeType})`;
+    });
+
+    await runStep("tools/call browser_confirm(无面板 MCP 环境 Fast-fail 拒绝)", async () => {
+      const result = await client.request("tools/call", {
+        name: "browser_confirm",
+        arguments: { reason: "测试敏感审批" },
+      });
+      if (!result.isError) throw new Error("无面板 MCP 模式下 browser_confirm 应当返回 isError");
+      const errText = result.content?.[0]?.text ?? "";
+      if (!errText.includes("无前端面板")) {
+        throw new Error(`错误提示未提及无前端面板: ${errText}`);
+      }
+      return `Fast-fail 判定正常: ${errText.slice(0, 80)}`;
+    });
+
     await runStep("tools/call browser_status(structuredContent 通道)", async () => {
       const result = await client.request("tools/call", { name: "browser_status", arguments: {} });
       if (result.isError) throw new Error("browser_status 失败");
@@ -199,7 +228,7 @@ async function main() {
       return "退出码 0,浏览器会话已清理";
     });
 
-    console.log("\n🎉 MCP e2e 全部通过(5 项)\n");
+    console.log("\n🎉 MCP e2e 全部通过(7 项)\n");
   } finally {
     if (client.exitCode === null) client.proc.kill("SIGKILL");
     rmSync(dshHome, { recursive: true, force: true });

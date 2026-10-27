@@ -8,6 +8,7 @@ import {
   setPendingPick, getPendingPick, clearPendingPick,
   pageRefsOf, setPageRefs, assignRefs,
   stateOf, registerTabPage, attachPage, profileConfig, currentProfile,
+  isInteractivePanelPresent,
 } from "../session.js";
 import { screencastManager } from "../session/screencast.js";
 import { injectWalker } from "../walker.js";
@@ -406,6 +407,9 @@ export async function confirmTool(config: BrowserConfig, args: Record<string, an
   if (!reason) {
     throw new Error("缺少 reason: 请说明要执行什么敏感操作、为什么需要审批(如「提交白名单表单,会产生线上数据变更」)");
   }
+  if (!isInteractivePanelPresent()) {
+    throw new Error("敏感操作审批失败: 当前环境无前端面板支持人工审批(已按安全策略 fail-closed 拒绝)");
+  }
   const timeoutMs = Math.min(
     Math.max(Number(args.timeoutMs ?? config.confirmTimeoutMs ?? 60_000) || 60_000, 1_000),
     600_000,
@@ -511,6 +515,16 @@ export async function pickToolOnPage(
     typeof args.instruction === "string" && args.instruction.trim() !== ""
       ? args.instruction.trim()
       : "请在实时画面大图上点击要教学的目标元素";
+  if (!isInteractivePanelPresent()) {
+    return {
+      picked: false,
+      status: "missed" as const,
+      instruction,
+      detail: "面板点选教学失败: 当前环境无前端面板供用户交互式点选",
+      waitedMs: 0,
+      ...(await pageIdentity(page)),
+    };
+  }
   const timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? 300_000) || 300_000, 1_000), 600_000);
   const id = `pick-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const meta = screencastManager.getLastFrame()?.metadata ?? undefined;

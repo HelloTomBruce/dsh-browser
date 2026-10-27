@@ -5,6 +5,17 @@
  */
 let pauseState: { instruction: string; startedAt: number } | null = null;
 
+let interactivePanelPresent = true;
+
+/** 标记当前宿主环境是否挂载了交互面板(DSH 插件=true;独立 MCP 模式=false)。 */
+export function setInteractivePanelPresent(present: boolean): void {
+  interactivePanelPresent = present;
+}
+
+export function isInteractivePanelPresent(): boolean {
+  return interactivePanelPresent;
+}
+
 export function setPauseInstruction(instruction: string): void {
   pauseState = { instruction, startedAt: Date.now() };
 }

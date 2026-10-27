@@ -304,14 +304,15 @@ v0.8.0 起本包附带独立 MCP 入口 `dsh-browser-mcp`(stdio),DSH 之外的 M
 }
 ```
 
-- 已安装本包时可直接用 `"command": "dsh-browser-mcp"`(bin);
+- 已安装本包时可直接用 `"command": "dsh-browser-mcp"` 或 `"dsh-browser-view"`(双 bin 别名);
 - 配置走环境变量 `DSH_BROWSER_<大写蛇形>` → 同名配置键(`TIMEOUT_MS`→`timeoutMs`),`true/false` 转 boolean、纯数字转 number、列表键逗号分隔;校验与默认值复用同一套(见上方配置表,不新增配置键);
 - 工具使用指引由 server `instructions` 下发(与 DSH systemPrompt 同源),`what:"登录"` 语义定位等用法完全一致;
-- 工具返回同时带 text 渲染与 `structuredContent`(声明过 outputSchema 的结构化数据)。
+- 工具元数据支持 MCP 2025 标准 `annotations`(`readOnlyHint` / `destructiveHint` 等属性);
+- 工具返回同时带 text 渲染与 `structuredContent`;`browser_screenshot` 额外返回原生多模态 `ImageContent`(base64 内联 PNG),多模态客户端(如 Claude Desktop)可直接渲染截图。
 
 **与 DSH 并行运行的注意**:两者是独立进程、各自独立浏览器会话——同一持久化 `userDataDir` 会因 Chromium 单例锁让后启动者失败,截图目录相同会写入交错,并行时务必给 MCP 配独立的 `DSH_BROWSER_USER_DATA_DIR` / `DSH_BROWSER_SCREENSHOT_DIR`。
 
-**人机协作降级**:MCP 模式没有 DSH 面板,`confirmMode` 保持默认 `off`(auto 模式下敏感操作会空转 `confirmTimeoutMs` 后 fail-closed 拒绝);`browser_pick_element`/`browser_pause_for_human` 无人应答、超时返回;需要人工登录的会话设 `DSH_BROWSER_HEADLESS=false`,用户直接在弹出的浏览器窗口操作。
+**人机协作降级(Fast-fail)**:MCP 模式没有 DSH 前端面板,`confirmMode: auto` 时敏感操作与 `browser_confirm` 均**立即 fail-closed 抛错拒绝**(Fast-fail,不再无谓空转 60s);`browser_pick_element` 快速返回失败;需要人工登录或人机辅助的会话设 `DSH_BROWSER_HEADLESS=false`,用户直接在弹出的真实浏览器窗口操作。
 
 ## 开发
 

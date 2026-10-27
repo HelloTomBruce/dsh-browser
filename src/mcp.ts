@@ -26,7 +26,7 @@ import { BROWSER_CONFIG_SCHEMA, BROWSER_DEFAULT_CONFIG } from "./lib/schema.js";
 import { browserSystemPrompt } from "./lib/prompts.js";
 import { registerTools } from "./browser/register.js";
 import { setDoctorProbe } from "./browser/tools.js";
-import { closeBrowser, sweepScreenshotDir } from "./browser/session.js";
+import { closeBrowser, sweepScreenshotDir, setInteractivePanelPresent } from "./browser/session.js";
 import { loadRecordings } from "./browser/recordings.js";
 import type { ReefContext, PlainToolDefinition, ToolRunContext } from "./lib/types.js";
 import type { BrowserConfig } from "./browser/types.js";
@@ -116,12 +116,70 @@ async function executeWithTimeout(
   }
 }
 
+/** 纯探测、只读查询与无副作用自检工具集合 */
+const READ_ONLY_TOOLS = new Set([
+  "browser_status",
+  "browser_snapshot",
+  "browser_find",
+  "browser_elements",
+  "browser_cookies",
+  "browser_network",
+  "browser_tabs",
+  "browser_report",
+  "browser_doctor",
+  "browser_inspect_history",
+  "browser_screenshot",
+  "browser_extract",
+  "browser_codegen",
+]);
+
+/** 破坏性关闭/清理或需显式安全把关动作 */
+const DESTRUCTIVE_TOOLS = new Set([
+  "browser_close",
+  "browser_close_tab",
+  "browser_confirm",
+]);
+
+/**
+ * 根据工具特性映射 MCP 2025 Tool Annotations(只读/破坏性/幂等/开放世界特征提示)。
+ */
+export function resolveToolAnnotations(name: string): {
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+} {
+  const isReadOnly = READ_ONLY_TOOLS.has(name);
+  const isDestructive = DESTRUCTIVE_TOOLS.has(name);
+  const annotations: {
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+    idempotentHint?: boolean;
+    openWorldHint?: boolean;
+  } = {};
+
+  if (isReadOnly) {
+    annotations.readOnlyHint = true;
+    annotations.destructiveHint = false;
+    annotations.idempotentHint = true;
+  } else {
+    annotations.readOnlyHint = false;
+    annotations.openWorldHint = true;
+    if (isDestructive) {
+      annotations.destructiveHint = true;
+    }
+  }
+
+  return annotations;
+}
+
 /**
  * 组装 MCP server(不绑定传输,便于 InMemoryTransport 单测)。
  * instructions 与 DSH systemPrompt 同源;inputSchema/outputSchema 直传
  * PlainToolDefinition 的 JSON Schema,不做 zod 转换。
  */
 export function createBrowserMcpServer(config: BrowserConfig): Server {
+  setInteractivePanelPresent(false);
   const defs = collectToolDefinitions(config);
   const server = new Server(
     { name: "dsh-browser-view", version: resolvePackageVersion() },
@@ -137,6 +195,7 @@ export function createBrowserMcpServer(config: BrowserConfig): Server {
       description: def.description,
       inputSchema: def.parameters as ListToolsResult["tools"][number]["inputSchema"],
       outputSchema: def.output.schema as ListToolsResult["tools"][number]["outputSchema"],
+      annotations: resolveToolAnnotations(def.name),
     })),
   }));
 
@@ -156,7 +215,25 @@ export function createBrowserMcpServer(config: BrowserConfig): Server {
       return executeWithTimeout(def, args, exec)
         .then((value) => {
           // output.render 本就是 [{type:"text",text}] —— 与 MCP content 同构,直传。
-          const content = def.output.render(args, value) as CallToolResult["content"];
+          const content = [...(def.output.render(args, value) as CallToolResult["content"])];
+          // 多模态增强:如果是 browser_screenshot 成功落盘，追加原生 ImageContent(base64)
+          if (
+            name === "browser_screenshot" &&
+            value !== null &&
+            typeof value === "object" &&
+            typeof (value as any).path === "string"
+          ) {
+            try {
+              const imgBuf = readFileSync((value as any).path);
+              content.push({
+                type: "image",
+                data: imgBuf.toString("base64"),
+                mimeType: "image/png",
+              });
+            } catch {
+              /* 落盘异常或读取失败时不阻塞文本通道 */
+            }
+          }
           const result: CallToolResult = { content };
           if (value !== null && typeof value === "object") {
             result.structuredContent = value as Record<string, unknown>;
@@ -202,10 +279,11 @@ export async function main(): Promise<void> {
   }
   const config = resolved as BrowserConfig;
 
-  // 与 DSH 入口对齐:加载磁盘录制资产 + 每小时截图清扫;MCP 模式无面板探针。
+  // 与 DSH 入口对齐:加载磁盘录制资产 + 每小时截图清扫;MCP 模式无面板探针与交互面板。
   const loaded = loadRecordings();
   if (loaded > 0) console.error(`dsh-browser-mcp: loaded ${loaded} saved recording(s)`);
   setDoctorProbe(null);
+  setInteractivePanelPresent(false);
   const sweepTimer = setInterval(() => {
     try {
       sweepScreenshotDir({ maxAgeDays: config.screenshotMaxAgeDays, maxCount: config.screenshotMaxCount });
