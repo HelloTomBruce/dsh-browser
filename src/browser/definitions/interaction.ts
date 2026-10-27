@@ -212,7 +212,7 @@ export function getInteractionTools(
     definePlainTool({
       name: "browser_eval",
       description:
-        "在页面上下文执行一段 JavaScript。表达式直接求值(如 'document.title');含换行/分号的语句会被包进 async IIFE,可用 return 返回。结果必须是可 JSON 序列化的值。",
+        "在页面上下文执行一段 JavaScript。表达式(含多行对象字面量/箭头函数 IIFE/顶层 await)直接返回值;语句脚本自动 return 最后一个顶层表达式的值,也可显式 return。结果必须是可 JSON 序列化的值,返回 mode 标明实际执行形态。",
       parameters: {
         type: "object",
         properties: {
@@ -226,6 +226,12 @@ export function getInteractionTools(
         additionalProperties: false,
         properties: {
           result: {},
+          mode: {
+            type: "string",
+            enum: ["expression", "statements-auto-return", "statements"],
+            description:
+              "实际执行形态:expression=表达式直取值(支持顶层 await 与多行对象字面量);statements-auto-return=语句体自动 return 最后一个顶层表达式;statements=语句体(显式 return 或纯副作用,无返回值时 result 为 null)。",
+          },
           scriptUnwrapped: { type: "boolean", description: "入参 script 疑似被 JSON 双重序列化(以引号包裹且含 \\n 字面量),已自动解码一层。" },
         },
         required: ["result"],

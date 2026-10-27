@@ -11,7 +11,7 @@ import {
   targetLocator, resolveTargetLocator,
 } from "../session.js";
 import { workspaceBaseDir } from "../../lib/tools.js";
-import { withTimeout, unwrapDoubleEncodedScript, workspaceFilePath } from "./common.js";
+import { withTimeout, unwrapDoubleEncodedScript, workspaceFilePath, buildEvalScript } from "./common.js";
 import { somFallbackShot } from "./inspection.js";
 import {
   isElementDisabled,
@@ -409,11 +409,10 @@ export async function selectTool(config: BrowserConfig, args: Record<string, any
 export async function evalTool(config: BrowserConfig, args: Record<string, any>) {
   const page = await getPage(config);
   const { script, unwrapped } = unwrapDoubleEncodedScript(String(args.script ?? ""));
-  // 表达式优先;含语句(换行/分号/return)时包成 async IIFE。
-  const wrapped = /[\n;]|^\s*return\b/.test(script)
-    ? `(async () => {\n${script}\n})()`
-    : `(${script})`;
-  const raw = await page.evaluate(wrapped);
+  // 三态执行包装(Node 侧语法预检):表达式直取值(含顶层 await 与多行对象字面量)/
+  // 语句自动 return 最后一个顶层表达式 / 语句(显式 return 或纯副作用)。
+  const { code, mode } = buildEvalScript(script);
+  const raw = await page.evaluate(code);
   // 净化成 lossless JSON:去掉原型链/函数/DOM 引用,无法序列化的降级为字符串。
   let result: unknown;
   try {
@@ -421,7 +420,7 @@ export async function evalTool(config: BrowserConfig, args: Record<string, any>)
   } catch {
     result = raw === undefined ? null : String(raw);
   }
-  return { result, ...(unwrapped ? { scriptUnwrapped: true } : {}) };
+  return { result, mode, ...(unwrapped ? { scriptUnwrapped: true } : {}) };
 }
 
 export async function downloadTool(config: BrowserConfig, args: Record<string, any>, exec?: ToolRunContext) {

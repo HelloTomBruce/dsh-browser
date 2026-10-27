@@ -71,7 +71,7 @@ dsh plugin --profile web add dsh-browser-view
 | `browser_select` | 下拉选择原语:原生 `<select>` 与 antd / element-plus / ARIA listbox 通用,selector/ref/what + option 文本一步完成;找不到选项时报错并列出可见选项 |
 | `browser_drag` | 拖拽/拖放:把源元素拖到目标元素上。源/目标各自定位——`source`/`sourceRef`/`sourceWhat`(+`sourceScope`)/`sourceMark` 四选一,`target`/`targetRef`/`targetWhat`(+`targetScope`)/`targetMark` 同理;优先 HTML5 原生拖放(dragTo),失败或跨 Frame 自动降级物理鼠标序列(覆盖看板卡片、滑块等鼠标拖动类控件),返回 `via` 标明实际通道;`dragged: true` 表示序列已执行,业务侧是否生效需配合 `browser_assert` 验证 |
 | `browser_form_fill` | 智能批量表单填写:一次调用自动识别并填充多个表单控件,结合 UI 适配器自动反查 label、处理输入/选择与弹层并支持稳态等待 |
-| `browser_eval` | 在页面上下文执行 JS(结果自动净化成 lossless JSON) |
+| `browser_eval` | 在页面上下文执行 JS(表达式直取值/语句自动 return 最后一个顶层表达式/顶层 await 原生支持;结果净化成 lossless JSON,返回 `mode` 标明执行形态) |
 | `browser_batch` | 动作批处理:一次调用顺序执行多个步骤 `[{tool, args}]`(点击→等待→输入→提交类小序列减少往返;禁止嵌套;可录制可回放) |
 | `browser_screenshot` | 截图存为 PNG(自动清理,见下);`baseline: "<名>"` 存为视觉回归基线;`som: true` 启用多模态 Set-of-Marks 视口标徽,在交互元素上绘制数字徽章并返回映射表供大模型精准看图定位 |
 | `browser_wait` / `browser_back` / `browser_reload` | 等待 / 后退 / 刷新 |
