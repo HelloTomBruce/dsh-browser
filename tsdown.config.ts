@@ -1,10 +1,12 @@
 /**
- * Two artifacts from one package:
+ * Three artifacts from one package:
  * - lib/index.js      — the node half (browser tools + live view), ESM.
  * - lib/client.js     — the browser half, a CJS closure-factory bundle shaped
  *                       for the dsh web module loader (banner/footer handoff),
  *                       with every non-platform import inlined (react stays
  *                       external, resolved from the loader module table).
+ * - lib/mcp.js        — standalone MCP stdio server (bin dsh-browser-mcp),
+ *                       independent of the dsh host; SDK stays external.
  */
 import { defineConfig, type UserConfig } from "tsdown";
 
@@ -54,4 +56,24 @@ const client: UserConfig = {
   },
 };
 
-export default defineConfig([node, client]);
+const mcp: UserConfig = {
+  name: "dsh-browser-view/mcp",
+  entry: { mcp: "lib/types/mcp.js" },
+  outDir: "lib",
+  format: ["esm"],
+  platform: "node",
+  target: "es2024",
+  fixedExtension: false,
+  dts: false,
+  clean: false,
+  // bin 入口需要 shebang;MCP SDK 与 dsh host 包一样保持外置,不打进产物。
+  outputOptions: {
+    entryFileNames: "mcp.js",
+    banner: "#!/usr/bin/env node",
+  },
+  deps: {
+    neverBundle: [/^@deepseek-ai\//, /^@modelcontextprotocol\/sdk\//],
+  },
+};
+
+export default defineConfig([node, client, mcp]);

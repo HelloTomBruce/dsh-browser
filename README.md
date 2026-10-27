@@ -1,14 +1,15 @@
 # dsh-browser-view
 
-DSH 插件:共享 Playwright 浏览器自动化 + 原生界面实时画面面板。一次安装,三件事:
+DSH 插件 + 独立 MCP server:共享 Playwright 浏览器自动化 + 原生界面实时画面面板。一次安装,三件事(+DSH 之外任意 MCP 客户端可直连):
 
 | 模块 | 做什么 |
 | --- | --- |
 | 🧭 **浏览器自动化** | 共享 Playwright 浏览器:多标签、多 profile、隔离 context、下载/上传、Cookie、what 意图语义定位(`browser_click { what: "登录" }` 一次调用替代快照→查找→点击三轮,零命中返回相近候选 + SoM 看图兜底)、SoM 标徽点击(`mark: N`)、open Shadow DOM 组合树穿透、SPA 路由后 ref 软失效重锚定、点击效果验证(`effect: true`,点了没动静自动换候选)、跨 Frame/IFrame 穿透定位、视口感知动态快照(`viewportOnly`)、多模态 SoM 视口标徽(`som: true`)、批量表单智能填充(`browser_form_fill`)、增量快照(历史版本环形缓存)、抽取字段自动建议(action:suggest),38 个 `browser_*` 工具 |
 | 🖥️ **实时画面** | 注入 DSH 界面右下角悬浮面板:浏览器状态 + 实时缩略图,点开大屏模态框(CDP MJPEG 实时流,自动跟随活动标签换页/新开自愈,流不可用时回退轮询截图;访问历史 2 秒轮询);**双向协作**——agent 等待人工操作/敏感审批时显示交互横幅、执行点击/输入前目标元素琥珀色高亮预告(confirmMode:auto 时敏感动作由宿主层强制拦截弹审批,agent 无法绕过),**面板点选教学**(browser_pick_element:疑难元素用户在大图上点一下,直接拿到稳定 selector+指纹+ref),「最近回归」行与报告模态可一键重跑(agent 忙碌自动置灰) |
 | ✅ **回归测试闭环** | 录制回放 + 选择器自愈 + 参数化/数据驱动 + 失败自动重试(`retryFailed`)+ 视觉回归 + 运行历史/报告导出 + **一键导出原生 Playwright 规范代码(`action: "export"`)** + 面板一键重跑(`/runs/rerun`,agent 忙碌置灰) |
+| 🌐 **MCP 接入** | 独立 stdio server(`dsh-browser-mcp`):Claude Desktop/ZCode/Cursor 等任意 MCP 客户端直连全部 38 个工具,不依赖 DSH;审批闸/录制/打点等安全语义与 DSH 宿主一致 |
 
-设计原则:能做的一次性操作交给 agent 用 bash 完成,插件只做 bash 做不到的常驻浏览器自动化。唯一第三方运行时依赖是 `playwright-core`(复用系统已装的 Edge/Chrome,无需下载 Chromium),不依赖任何 `@deepseek-ai` 运行时包。
+设计原则:能做的一次性操作交给 agent 用 bash 完成,插件只做 bash 做不到的常驻浏览器自动化。运行时依赖 `playwright-core`(复用系统已装的 Edge/Chrome,无需下载 Chromium)与 `@modelcontextprotocol/sdk`(仅 MCP 入口使用,不进 DSH 插件加载链),不依赖任何 `@deepseek-ai` 运行时包。
 
 ## 安装
 
@@ -281,6 +282,36 @@ browser_confirm({
 - **状态行**:浏览器开关、标签数、当前 URL;
 - **实时缩略图**:浏览器打开时显示,点击弹出大屏模态框——2 秒轮询实时画面,下方列出**访问历史**(最近 50 条,点击可在新标签打开);
 - **最近回归**:面板底部一行显示最近一次 `browser_replay` / `browser_batch` 的结果(通过数 / 自愈数 / 时间)。
+
+## MCP 接入(独立 server,不依赖 DSH)
+
+v0.8.0 起本包附带独立 MCP 入口 `dsh-browser-mcp`(stdio),DSH 之外的 MCP 客户端(Claude Desktop / ZCode / Cursor 等)可直接调用全部 38 个工具——走与 DSH 宿主**同一条** registerTools 装配链,审批闸/录制打点/时光机行为一致:
+
+```jsonc
+// 客户端 mcpServers 配置示例
+{
+  "mcpServers": {
+    "dsh-browser": {
+      "command": "npx",
+      "args": ["-y", "dsh-browser-view"],
+      "env": {
+        "DSH_BROWSER_HEADLESS": "true",
+        "DSH_BROWSER_USER_DATA_DIR": "~/.dsh-browser/mcp-profile",
+        "DSH_BROWSER_TOOLSET": "core"
+      }
+    }
+  }
+}
+```
+
+- 已安装本包时可直接用 `"command": "dsh-browser-mcp"`(bin);
+- 配置走环境变量 `DSH_BROWSER_<大写蛇形>` → 同名配置键(`TIMEOUT_MS`→`timeoutMs`),`true/false` 转 boolean、纯数字转 number、列表键逗号分隔;校验与默认值复用同一套(见上方配置表,不新增配置键);
+- 工具使用指引由 server `instructions` 下发(与 DSH systemPrompt 同源),`what:"登录"` 语义定位等用法完全一致;
+- 工具返回同时带 text 渲染与 `structuredContent`(声明过 outputSchema 的结构化数据)。
+
+**与 DSH 并行运行的注意**:两者是独立进程、各自独立浏览器会话——同一持久化 `userDataDir` 会因 Chromium 单例锁让后启动者失败,截图目录相同会写入交错,并行时务必给 MCP 配独立的 `DSH_BROWSER_USER_DATA_DIR` / `DSH_BROWSER_SCREENSHOT_DIR`。
+
+**人机协作降级**:MCP 模式没有 DSH 面板,`confirmMode` 保持默认 `off`(auto 模式下敏感操作会空转 `confirmTimeoutMs` 后 fail-closed 拒绝);`browser_pick_element`/`browser_pause_for_human` 无人应答、超时返回;需要人工登录的会话设 `DSH_BROWSER_HEADLESS=false`,用户直接在弹出的浏览器窗口操作。
 
 ## 开发
 

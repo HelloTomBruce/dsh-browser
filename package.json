@@ -1,7 +1,7 @@
 {
   "name": "dsh-browser-view",
-  "version": "0.7.5",
-  "description": "DSH 插件:共享 Playwright 浏览器自动化(38 个 browser_* 工具,含 what 意图语义定位(一次调用替代快照→查找→点击)、SoM 标徽看图点击与零命中截图兜底、SPA ref 软失效重锚定、open Shadow DOM 组合树穿透、跨 Frame/IFrame 定位、视口感知动态快照、批量表单智能填充、点击效果验证与定位失败遥测、Playwright 规范代码导出、批处理、视觉回归、选择器自愈、增量快照)+ 人机协作(面板点选教学 browser_pick_element、人工接管等待、敏感操作审批硬拦截、人机混合录制、面板一键重跑)+ CDP 流式推流、拟人化轨迹与高斯击键、全景时光机、企业富控件矩阵。仅依赖 playwright-core。",
+  "version": "0.8.0",
+  "description": "DSH 插件:共享 Playwright 浏览器自动化(38 个 browser_* 工具,含 what 意图语义定位(一次调用替代快照→查找→点击)、SoM 标徽看图点击与零命中截图兜底、SPA ref 软失效重锚定、open Shadow DOM 组合树穿透、跨 Frame/IFrame 定位、视口感知动态快照、批量表单智能填充、点击效果验证与定位失败遥测、Playwright 规范代码导出、批处理、视觉回归、选择器自愈、增量快照)+ 人机协作(面板点选教学 browser_pick_element、人工接管等待、敏感操作审批硬拦截、人机混合录制、面板一键重跑)+ CDP 流式推流、拟人化轨迹与高斯击键、全景时光机、企业富控件矩阵。另附独立 MCP server 入口(bin dsh-browser-mcp,stdio),任意 MCP 客户端可直接调用全部工具。运行时依赖 playwright-core 与 @modelcontextprotocol/sdk(仅 MCP 入口,不进 DSH 插件加载链)。",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",
@@ -14,11 +14,19 @@
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
     },
+    "./mcp": {
+      "types": "./lib/types/mcp.d.ts",
+      "default": "./lib/mcp.js"
+    },
     "./package.json": "./package.json"
+  },
+  "bin": {
+    "dsh-browser-mcp": "./lib/mcp.js"
   },
   "files": [
     "lib/index.js",
     "lib/client.js",
+    "lib/mcp.js",
     "lib/types/**/*.d.ts",
     "cordis.patch.yml",
     "README.md",
@@ -37,6 +45,7 @@
     "test:span": "tsx scripts/test-dev-server-clickable-span.ts",
     "test:pick": "tsx scripts/test-panel-pick.ts",
     "test:stream": "tsx scripts/test-panel-stream.ts",
+    "test:mcp": "tsx scripts/test-mcp-e2e.ts",
     "dev:server": "tsx scripts/dev-server.ts",
     "verify": "npm run typecheck && npm run lint && npm run test && npm run build",
     "prepublishOnly": "npm run verify"
@@ -53,6 +62,9 @@
     "dsh",
     "dsh-plugin",
     "deepseek-harness",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
     "browser",
     "playwright",
     "automation",
@@ -63,6 +75,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "playwright-core": "^1.49.0"
   },
   "devDependencies": {
