@@ -221,6 +221,7 @@ export function registerBrowserApi(ctx: ReefContext, config: BrowserConfig, base
             });
             res.write("retry: 1000\n\n");
 
+            // 初始目标页由本层解析传入(manager 纯推模型,不反查会话层)
             const unsubscribe = screencastManager.subscribe((frame) => {
               try {
                 res.write(
@@ -229,7 +230,7 @@ export function registerBrowserApi(ctx: ReefContext, config: BrowserConfig, base
               } catch {
                 /* closed */
               }
-            });
+            }, page);
 
             req.on("close", () => {
               unsubscribe();
@@ -253,7 +254,7 @@ export function registerBrowserApi(ctx: ReefContext, config: BrowserConfig, base
             } catch {
               /* closed */
             }
-          });
+          }, page);
 
           req.on("close", () => {
             unsubscribe();

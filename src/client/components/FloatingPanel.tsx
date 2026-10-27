@@ -3,6 +3,7 @@ import { createElement, type MouseEvent } from "react";
 import type { BrowserOp, BrowserStatus, LatestRun, Palette, PendingConfirm, PendingPick } from "../types.js";
 import { fmtTime } from "../theme.js";
 import { ConfirmCard } from "./ConfirmCard.js";
+import { LiveImage } from "./LiveImage.js";
 
 interface FloatingPanelProps {
   status: BrowserStatus | null;
@@ -175,13 +176,9 @@ export function FloatingPanel({
       : null,
     // Live Stream / Screenshot Thumbnail
     status?.open
-      ? createElement("img", {
-          src: streamSrc || shotSrc,
-          onError: (e: any) => {
-            if (e.currentTarget.src !== shotSrc) {
-              e.currentTarget.src = shotSrc;
-            }
-          },
+      ? createElement(LiveImage, {
+          streamSrc,
+          shotSrc,
           alt: "实时画面",
           title: "点击放大查看实时大屏与访问历史",
           onClick: onOpenModal,

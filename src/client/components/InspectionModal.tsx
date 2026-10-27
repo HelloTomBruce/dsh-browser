@@ -2,6 +2,7 @@
 import { createElement, useEffect, type MouseEvent } from "react";
 import type { NavHistoryItem, Palette, BrowserStatus, PendingPick } from "../types.js";
 import { fmtTime } from "../theme.js";
+import { LiveImage } from "./LiveImage.js";
 
 interface InspectionModalProps {
   status: BrowserStatus | null;
@@ -158,13 +159,9 @@ export function InspectionModal({
         : null,
       // Large Live Stream / Screenshot
       status?.open
-        ? createElement("img", {
-            src: streamSrc || shotSrc,
-            onError: (e: any) => {
-              if (e.currentTarget.src !== shotSrc) {
-                e.currentTarget.src = shotSrc;
-              }
-            },
+        ? createElement(LiveImage, {
+            streamSrc,
+            shotSrc,
             alt: "浏览器大图",
             ...(picking ? { onClick: handleImageClick } : {}),
             style: {

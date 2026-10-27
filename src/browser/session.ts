@@ -433,6 +433,14 @@ function pruneClosedPages(state: ProfileState): void {
   }
 }
 
+/** 实时画面流跟随活动页(推模型:session 层在 activeId 变化点主动通知,
+ * screencast 模块不反查本 facade,避免循环依赖)。 */
+function syncScreencast(state: ProfileState): void {
+  if (state !== stateOf()) return; // 只跟随当前 profile 的活动页
+  // 免 prune 直读:通知点刚写完 activeId,僵尸页由各自的 close 监听路径收敛
+  void screencastManager.syncTo(state.pages.get(state.activeId ?? -1) ?? null);
+}
+
 /** 把一个已 attach 的页面注册进 profile 标签表并激活,返回分配的 tab id。
  * 唯一注册路径:同时挂 close 监听幂等摘除外部关闭的页(否则僵尸句柄会永久占用
  * activeId,所有工具连报 "Target page...closed" 而 tabs list 仍显示存活)。 */
@@ -441,12 +449,14 @@ export function registerTabPage(state: ProfileState, page: Page): number {
   state.pages.set(id, page);
   state.activeId = id;
   (state.tabMeta ??= new Map()).set(id, { createdAt: Date.now() });
+  syncScreencast(state);
   page.on("close", () => {
     // 幂等:tabs close 等路径已手动删除时直接跳过,防双写竞态
     if (!state.pages.has(id)) return;
     state.pages.delete(id);
     state.tabMeta?.delete(id);
     if (state.activeId === id) state.activeId = null;
+    syncScreencast(state);
   });
   return id;
 }
@@ -565,6 +575,9 @@ export function setLastFormFields(fields: FormField[]): void {
 /** 切换当前 profile。 */
 export function setCurrentProfile(name: string): void {
   currentProfile = name;
+  // profile 切换不经 registerTabPage,单独通知实时画面流跟随新 profile 的活动页
+  const state = stateOf();
+  void screencastManager.syncTo(state.pages.get(state.activeId ?? -1) ?? null);
 }
 
 // ---------------------------------------------------------------------------

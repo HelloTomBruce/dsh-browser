@@ -1,6 +1,6 @@
 {
   "name": "dsh-browser-view",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "description": "DSH 插件:共享 Playwright 浏览器自动化(38 个 browser_* 工具,含 what 意图语义定位(一次调用替代快照→查找→点击)、SoM 标徽看图点击与零命中截图兜底、SPA ref 软失效重锚定、open Shadow DOM 组合树穿透、跨 Frame/IFrame 定位、视口感知动态快照、批量表单智能填充、点击效果验证与定位失败遥测、Playwright 规范代码导出、批处理、视觉回归、选择器自愈、增量快照)+ 人机协作(面板点选教学 browser_pick_element、人工接管等待、敏感操作审批硬拦截、人机混合录制、面板一键重跑)+ CDP 流式推流、拟人化轨迹与高斯击键、全景时光机、企业富控件矩阵。仅依赖 playwright-core。",
   "type": "module",
   "main": "./lib/index.js",
@@ -36,6 +36,7 @@
     "test:shadow": "tsx scripts/test-dev-server-shadow.ts",
     "test:span": "tsx scripts/test-dev-server-clickable-span.ts",
     "test:pick": "tsx scripts/test-panel-pick.ts",
+    "test:stream": "tsx scripts/test-panel-stream.ts",
     "dev:server": "tsx scripts/dev-server.ts",
     "verify": "npm run typecheck && npm run lint && npm run test && npm run build",
     "prepublishOnly": "npm run verify"

@@ -5,7 +5,7 @@ DSH 插件:共享 Playwright 浏览器自动化 + 原生界面实时画面面板
 | 模块 | 做什么 |
 | --- | --- |
 | 🧭 **浏览器自动化** | 共享 Playwright 浏览器:多标签、多 profile、隔离 context、下载/上传、Cookie、what 意图语义定位(`browser_click { what: "登录" }` 一次调用替代快照→查找→点击三轮,零命中返回相近候选 + SoM 看图兜底)、SoM 标徽点击(`mark: N`)、open Shadow DOM 组合树穿透、SPA 路由后 ref 软失效重锚定、点击效果验证(`effect: true`,点了没动静自动换候选)、跨 Frame/IFrame 穿透定位、视口感知动态快照(`viewportOnly`)、多模态 SoM 视口标徽(`som: true`)、批量表单智能填充(`browser_form_fill`)、增量快照(历史版本环形缓存)、抽取字段自动建议(action:suggest),38 个 `browser_*` 工具 |
-| 🖥️ **实时画面** | 注入 DSH 界面右下角悬浮面板:浏览器状态 + 实时缩略图,点开大屏模态框(2 秒轮询画面 + 访问历史);**双向协作**——agent 等待人工操作/敏感审批时显示交互横幅、执行点击/输入前目标元素琥珀色高亮预告(confirmMode:auto 时敏感动作由宿主层强制拦截弹审批,agent 无法绕过),**面板点选教学**(browser_pick_element:疑难元素用户在大图上点一下,直接拿到稳定 selector+指纹+ref),「最近回归」行与报告模态可一键重跑(agent 忙碌自动置灰) |
+| 🖥️ **实时画面** | 注入 DSH 界面右下角悬浮面板:浏览器状态 + 实时缩略图,点开大屏模态框(CDP MJPEG 实时流,自动跟随活动标签换页/新开自愈,流不可用时回退轮询截图;访问历史 2 秒轮询);**双向协作**——agent 等待人工操作/敏感审批时显示交互横幅、执行点击/输入前目标元素琥珀色高亮预告(confirmMode:auto 时敏感动作由宿主层强制拦截弹审批,agent 无法绕过),**面板点选教学**(browser_pick_element:疑难元素用户在大图上点一下,直接拿到稳定 selector+指纹+ref),「最近回归」行与报告模态可一键重跑(agent 忙碌自动置灰) |
 | ✅ **回归测试闭环** | 录制回放 + 选择器自愈 + 参数化/数据驱动 + 失败自动重试(`retryFailed`)+ 视觉回归 + 运行历史/报告导出 + **一键导出原生 Playwright 规范代码(`action: "export"`)** + 面板一键重跑(`/runs/rerun`,agent 忙碌置灰) |
 
 设计原则:能做的一次性操作交给 agent 用 bash 完成,插件只做 bash 做不到的常驻浏览器自动化。唯一第三方运行时依赖是 `playwright-core`(复用系统已装的 Edge/Chrome,无需下载 Chromium),不依赖任何 `@deepseek-ai` 运行时包。
