@@ -32,6 +32,7 @@ export function getInteractionTools(
           effect: { type: "boolean", description: "点击效果验证:收集点击后的 DOM 变化摘要/URL 变化/新增网络请求;what 多候选首击无动静时自动换次候选。" },
           strict: { type: "boolean", description: "多命中即抛错(对齐 Playwright strict),要求定位唯一;默认 false 操作第 1 个并在返回中提示命中数。" },
           timeoutMs: { type: "integer" },
+          expectUrl: { type: "string", description: "页面预期校验(opt-in):正则(非法时按子串);定位前当前 URL 不匹配直接报错,把「页面被切换/回退」从诡异失败变为一句话可诊断的错误。" },
         },
         additionalProperties: false,
       },
@@ -48,6 +49,7 @@ export function getInteractionTools(
           visibleCount: { type: "integer", description: "命中元素中的可见数量。" },
           hint: { type: "string", description: "matchedCount>1 时的消歧指引。" },
           viaBridge: { type: "boolean", description: "what 未命中时经页面 __DSH_BRIDGE__(vite-plugin-dsh-bridge)兜底命中。" },
+          warning: { type: "string", description: "执行过程中检测到的环境异常提示(如非工具触发的页面导航)。" },
         },
         required: ["clicked", "url", "title"],
       },
@@ -58,7 +60,7 @@ export function getInteractionTools(
     definePlainTool({
       name: "browser_type",
       description:
-        "向输入框输入文本:selector(CSS)、ref 或 what(意图描述,如 '用户名'/'搜索')三选一定位目标(同时传多个会报参数错误;容器内定位用 what + scope)。clear=true 时先清空再输入(推荐用于表单);submit=true 时输入后按回车;editor=true 时适配 Monaco/CodeMirror/富文本编辑器。",
+        "向输入框输入文本:selector(CSS)、ref 或 what(意图描述,如 '用户名'/'搜索')三选一定位目标(同时传多个会报参数错误;容器内定位用 what + scope)。clear=true 时先清空再输入(推荐用于表单);submit=true 时输入后按回车;editor=true 时适配 Monaco/CodeMirror/富文本编辑器。定位与点击均失败时做焦点归属校验:焦点不在目标内(含子元素)则中止输入并附当前焦点线索,不会盲打到错误输入框;返回 typedVia 标明实际输入通道。expectUrl 传入时先校验当前页面 URL,不符直接报错(防页面被切换后打错位置)。",
       parameters: {
         type: "object",
         properties: {
@@ -74,6 +76,7 @@ export function getInteractionTools(
           strict: { type: "boolean", description: "多命中即抛错(对齐 Playwright strict);多命中或 strict 时不再 force 降级点击,遮罩拦截会直接暴露。" },
           delayMs: { type: "integer" },
           timeoutMs: { type: "integer" },
+          expectUrl: { type: "string", description: "页面预期校验(opt-in):正则(非法时按子串);定位前当前 URL 不匹配直接报错,把「页面被切换/回退」从诡异失败变为一句话可诊断的错误。" },
         },
         required: ["text"],
         additionalProperties: false,
@@ -83,6 +86,8 @@ export function getInteractionTools(
         additionalProperties: false,
         properties: {
           typed: { type: "boolean" },
+          typedVia: { type: "string", enum: ["fill", "clicked", "focus-kept", "editor"], description: "实际输入通道:fill=clear 清空重填;clicked=点击获得焦点;focus-kept=点击超时但焦点已在目标内续打;editor=编辑器适配。" },
+          focusedElement: { type: "string", description: "focus-kept 通道下当前焦点元素 outerHTML 片段(调试线索)。" },
           selector: { type: "string" },
           submit: { type: "boolean" },
           url: { type: "string" },
@@ -90,6 +95,7 @@ export function getInteractionTools(
           matchedCount: { type: "integer", description: "选择器命中的元素总数(多命中歧义可见化)。" },
           visibleCount: { type: "integer", description: "命中元素中的可见数量。" },
           hint: { type: "string", description: "matchedCount>1 时的消歧指引。" },
+          warning: { type: "string", description: "执行过程中检测到的环境异常提示(如非工具触发的页面导航)。" },
         },
         required: ["typed", "selector", "submit", "url", "title"],
       },
@@ -149,6 +155,7 @@ export function getInteractionTools(
           clear: { type: "boolean", description: "是否在选择前先清空已有选中项(对于多选下拉，替换而非叠加旧选项)。" },
           strict: { type: "boolean", description: "多命中即抛错(对齐 Playwright strict)。" },
           timeoutMs: { type: "integer" },
+          expectUrl: { type: "string", description: "页面预期校验(opt-in):正则(非法时按子串);定位前当前 URL 不匹配直接报错,把「页面被切换/回退」从诡异失败变为一句话可诊断的错误。" },
         },
         required: ["option"],
         additionalProperties: false,
@@ -164,6 +171,7 @@ export function getInteractionTools(
           matchedCount: { type: "integer", description: "选择器命中的元素总数(多命中歧义可见化)。" },
           visibleCount: { type: "integer", description: "命中元素中的可见数量。" },
           hint: { type: "string", description: "matchedCount>1 时的消歧指引。" },
+          warning: { type: "string", description: "执行过程中检测到的环境异常提示(如非工具触发的页面导航)。" },
         },
         required: ["selected", "selector", "url", "title"],
       },

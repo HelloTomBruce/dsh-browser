@@ -1,7 +1,8 @@
 // 多命中歧义可见化测试:click/type/press/select 成功返回透出 matchedCount/
 // visibleCount 并在 >1 时附 hint;strict 多命中抛错;type 的 force 降级守卫
-// (遮罩拦截不再被抹平)。stub 模式照抄 context.test.ts,locator 按 selector 分流
-// (弹窗探测选择器返回 0 命中,目标选择器返回配置的计数)。
+// (遮罩拦截不再被抹平)与焦点归属校验(click 双失败后焦点不在目标内即中止,
+// 不再盲打;在目标内续打标 typedVia: "focus-kept")。stub 模式照抄 context.test.ts,
+// locator 按 selector 分流(弹窗探测选择器返回 0 命中,目标选择器返回配置的计数)。
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { clickTool, typeTool, pressTool, selectTool } from "../src/browser/tools.js";
 import { currentProfile, getProfileState } from "../src/browser/session.js";
@@ -14,13 +15,23 @@ interface TargetStub extends Locator {
   __clickCalls: number;
 }
 
-function makeTargetStub(total: number, visible: number, opts: { failFirstClick?: boolean } = {}): TargetStub {
+function makeTargetStub(
+  total: number,
+  visible: number,
+  opts: { failFirstClick?: boolean; failAllClicks?: boolean; focusOwns?: boolean; focusDesc?: string } = {},
+): TargetStub {
   let clickCalls = 0;
   const clickImpl = async () => {
     clickCalls += 1;
+    if (opts.failAllClicks === true) throw new Error("element is covered by another element");
     if (opts.failFirstClick === true && clickCalls === 1) throw new Error("element is covered by another element");
     return undefined;
   };
+  // evaluate 按调用方分流:焦点归属探针(含 activeElement)返回配置的归属结果,其余 false
+  const evalImpl = (fn: unknown) =>
+    typeof fn === "function" && String(fn).includes("activeElement")
+      ? Promise.resolve({ owns: opts.focusOwns === true, desc: opts.focusDesc ?? "<input id='focus-target'>" })
+      : Promise.resolve(false);
   const vis: any = {
     count: vi.fn().mockResolvedValue(visible),
     first: () => vis,
@@ -28,7 +39,7 @@ function makeTargetStub(total: number, visible: number, opts: { failFirstClick?:
     click: vi.fn().mockImplementation(clickImpl),
     press: vi.fn().mockResolvedValue(undefined),
     fill: vi.fn().mockResolvedValue(undefined),
-    evaluate: vi.fn().mockResolvedValue(false),
+    evaluate: vi.fn().mockImplementation(evalImpl),
     isVisible: vi.fn().mockResolvedValue(true),
   };
   const base: any = {
@@ -39,7 +50,7 @@ function makeTargetStub(total: number, visible: number, opts: { failFirstClick?:
     click: vi.fn().mockImplementation(clickImpl),
     press: vi.fn().mockResolvedValue(undefined),
     fill: vi.fn().mockResolvedValue(undefined),
-    evaluate: vi.fn().mockResolvedValue(false),
+    evaluate: vi.fn().mockImplementation(evalImpl),
     isVisible: vi.fn().mockResolvedValue(true),
     waitFor: vi.fn().mockResolvedValue(undefined),
   };
@@ -120,11 +131,12 @@ describe("多命中歧义可见化", () => {
     await expect(clickTool(CONFIG, { selector: "#dup", strict: true })).rejects.toThrow(/strict 模式拒绝多命中.*2 个元素/s);
   });
 
-  it("type 多命中:返回字段齐全,正常点击(非 force 直达)", async () => {
+  it("type 多命中:返回字段齐全,正常点击(非 force 直达),typedVia=clicked", async () => {
     const stub = makeTargetStub(2, 1);
     install(makeFakePage(stub));
     const r = (await typeTool(CONFIG, { selector: "[data-dsh-field='ruleName']", text: "hello" })) as any;
     expect(r.typed).toBe(true);
+    expect(r.typedVia).toBe("clicked");
     expect(r.matchedCount).toBe(2);
     expect(r.hint).toContain("命中 2 个元素");
     expect(stub.__clickCalls).toBe(1);
@@ -137,12 +149,41 @@ describe("多命中歧义可见化", () => {
     expect(stub.__clickCalls).toBe(1); // 没有 force 第二次
   });
 
-  it("type 单命中首个被遮挡:保留旧 force 降级行为", async () => {
+  it("type 单命中首个被遮挡但 force 成功:继续输入,typedVia=clicked", async () => {
     const stub = makeTargetStub(1, 1, { failFirstClick: true });
     install(makeFakePage(stub));
     const r = (await typeTool(CONFIG, { selector: "#solo", text: "x" })) as any;
     expect(r.typed).toBe(true);
+    expect(r.typedVia).toBe("clicked");
     expect(stub.__clickCalls).toBe(2); // force 重试了一次
+  });
+
+  it("type click 双失败且焦点不在目标内:中止输入不盲打,附当前焦点线索(未发版)", async () => {
+    const stub = makeTargetStub(1, 1, { failAllClicks: true, focusOwns: false, focusDesc: "<input id='other-input'>" });
+    install(makeFakePage(stub));
+    const err = await typeTool(CONFIG, { selector: "#solo", text: "x" }).catch((e) => e);
+    expect(err.message).toMatch(/焦点不在目标上.*已中止输入/);
+    expect(err.message).toContain("<input id='other-input'>");
+    expect(stub.__clickCalls).toBe(2); // 首击 + force 都试过
+  });
+
+  it("type click 双失败但焦点恰在目标内(复合控件 contains 放宽):续打,typedVia=focus-kept + focusedElement", async () => {
+    const stub = makeTargetStub(1, 1, { failAllClicks: true, focusOwns: true, focusDesc: "<input id='inner-input'>" });
+    install(makeFakePage(stub));
+    const r = (await typeTool(CONFIG, { selector: "#wrapper", text: "x" })) as any;
+    expect(r.typed).toBe(true);
+    expect(r.typedVia).toBe("focus-kept");
+    expect(r.focusedElement).toContain("inner-input");
+    expect(stub.__clickCalls).toBe(2);
+  });
+
+  it("type clear:true 走 fill 通道,typedVia=fill", async () => {
+    const stub = makeTargetStub(1, 1);
+    install(makeFakePage(stub));
+    const r = (await typeTool(CONFIG, { selector: "#solo", text: "x", clear: true })) as any;
+    expect(r.typed).toBe(true);
+    expect(r.typedVia).toBe("fill");
+    expect(stub.__clickCalls).toBe(0);
   });
 
   it("type strict 多命中 → 抛错", async () => {

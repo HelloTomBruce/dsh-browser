@@ -67,8 +67,8 @@ dsh plugin --profile web add dsh-browser-view
 | `browser_snapshot` | 页面快照:`mode: "text"`(默认)返回压缩后的文本/链接/输入框;`mode: "aria"` 返回可访问性树,可交互元素带 `[ref=eN]` 短引用;`scope`(CSS 选择器)限定提取区域(text/aria 都生效);`since`(上次返回的 contentVersion)增量重读——未变返回 `unchanged`,变了只返回变化行(`diff` + `changedFrom`/`removed`),翻页后重读 token 降一个量级 |
 | `browser_find` | 语义元素定位:按名称/id/data-testid 查找可交互元素,只返回命中 ref + ancestors 区域链(大页面定位单目标比全量 aria 快照省 95%+ token);`exact` 精确匹配、`scope` 限定容器;多命中全返回,零命中附相近候选 |
 | `browser_elements` | 可交互元素结构化清单(input/button/select/链接 + 关联 label + 现成 CSS 选择器;有展开下拉时附可见选项) |
-| `browser_click` / `browser_type` / `browser_press` | 点击 / 输入(可清空、可回车提交)/ 按键;`selector`(CSS)、`ref`(aria 快照)、`what`(意图语义定位,页内打分匹配并自动注册 ref,零命中返回相近候选)、`mark`(SoM 标徽编号)四选一;click 另有 `effect: true` 点击效果验证(DOM/URL/网络动静摘要,what 多候选首击无动静自动换选);自动穿透跨域子 Frame 与 open Shadow DOM |
-| `browser_select` | 下拉选择原语:原生 `<select>` 与 antd / element-plus / ARIA listbox 通用,selector/ref/what + option 文本一步完成;找不到选项时报错并列出可见选项 |
+| `browser_click` / `browser_type` / `browser_press` | 点击 / 输入(可清空、可回车提交)/ 按键;`selector`(CSS)、`ref`(aria 快照)、`what`(意图语义定位,页内打分匹配并自动注册 ref,零命中返回相近候选)、`mark`(SoM 标徽编号)四选一;click 另有 `effect: true` 点击效果验证(DOM/URL/网络动静摘要,what 多候选首击无动静自动换选);type 定位与点击均失败时做**焦点归属校验**——焦点不在目标内即中止输入不盲打,返回 `typedVia`(fill/clicked/focus-kept/editor)标明输入通道;三者均支持 `expectUrl`(opt-in 页面预期校验,防页面被切换后误操作);检测到非工具触发的页面导航时返回附 `warning`;自动穿透跨域子 Frame 与 open Shadow DOM |
+| `browser_select` | 下拉选择原语:原生 `<select>` 与 antd / element-plus / ARIA listbox 通用,selector/ref/what + option 文本一步完成;找不到选项时报错并列出可见选项;触发器点击后展开信号复核(未展开快速失败并归因);支持 `expectUrl` 页面预期校验 |
 | `browser_drag` | 拖拽/拖放:把源元素拖到目标元素上。源/目标各自定位——`source`/`sourceRef`/`sourceWhat`(+`sourceScope`)/`sourceMark` 四选一,`target`/`targetRef`/`targetWhat`(+`targetScope`)/`targetMark` 同理;优先 HTML5 原生拖放(dragTo),失败或跨 Frame 自动降级物理鼠标序列(覆盖看板卡片、滑块等鼠标拖动类控件),返回 `via` 标明实际通道;`dragged: true` 表示序列已执行,业务侧是否生效需配合 `browser_assert` 验证 |
 | `browser_form_fill` | 智能批量表单填写:一次调用自动识别并填充多个表单控件,结合 UI 适配器自动反查 label、处理输入/选择与弹层并支持稳态等待 |
 | `browser_eval` | 在页面上下文执行 JS(表达式直取值/语句自动 return 最后一个顶层表达式/顶层 await 原生支持;结果净化成 lossless JSON,返回 `mode` 标明执行形态) |

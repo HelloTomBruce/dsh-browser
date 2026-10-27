@@ -81,7 +81,8 @@ describe("ref 坐标兜底 (降级 3)", () => {
     const res = await resolveTargetLocator(page, { ref: "e1" });
     expect(res.locator).toBe(locMock);
     expect(page.locator).toHaveBeenLastCalledWith("#rebound");
-    expect(page.evaluate).toHaveBeenCalledTimes(1); // 仅坐标探测一次
+    // 坐标探测 1 + 活动弹窗仲裁 1(未发版;stub locator count=1 → 并集快探命中进入仲裁)
+    expect(page.evaluate).toHaveBeenCalledTimes(2);
   });
 
   it("role 不相似不兜底(维持 ref 已失效错误)", async () => {
@@ -102,8 +103,9 @@ describe("ref 坐标兜底 (降级 3)", () => {
     };
     setPageRefs(page, new Map([["e1", { role: "button", name: "登录", selector: "#x" }]]));
     await expect(resolveTargetLocator(page, { ref: "e1" })).rejects.toThrow("ref e1 已失效");
-    // 唯一的 evaluate 是失败遥测探测(非坐标兜底/重锚定扫描)
-    expect(page.evaluate).toHaveBeenCalledTimes(1);
+    // evaluate = 失败遥测探测 1 + 活动弹窗仲裁 1(未发版弹窗仲裁新增;stub locator count=1
+    // → 并集快探命中进入仲裁;非坐标兜底/重锚定扫描)
+    expect(page.evaluate).toHaveBeenCalledTimes(2);
   });
 });
 

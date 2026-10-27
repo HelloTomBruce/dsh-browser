@@ -134,19 +134,19 @@ describe("resolveTargetLocator 降级 4(软失效重锚定)", () => {
       ["e2", { role: "button", name: "注册", selector: "#old2", navSeq: 0 }],
     ]));
     await expect(resolveTargetLocator(page, { ref: "e1" })).rejects.toThrow("已失效");
-    const evaluateCalls = (page.evaluate as any).mock.calls.length; // 重锚定扫描 1 + 失败遥测探测 1
+    const evaluateCalls = (page.evaluate as any).mock.calls.length; // 重锚定扫描 1 + 失败遥测探测 1 + 弹窗仲裁 1(未发版;stub locator count=1 → 并集快探命中进入仲裁)
     await expect(resolveTargetLocator(page, { ref: "e2" })).rejects.toThrow("已失效");
-    // 第二次失败只多一次失败遥测探测(+1),不再全页重扫(否则会是 +2)
-    expect((page.evaluate as any).mock.calls.length).toBe(evaluateCalls + 1);
+    // 第二次失败只多「失败遥测探测 + 弹窗仲裁」(+2),不再全页重扫(否则会是 +3)
+    expect((page.evaluate as any).mock.calls.length).toBe(evaluateCalls + 2);
   });
 
   it("代际未过期(正常 ref)失败不走重锚定", async () => {
     const { page } = staleRefPage({ elements: [{ role: "button", name: "登录", selector: "#new" }], truncated: false });
     setPageRefs(page, new Map([["e1", { role: "button", name: "登录", selector: "#old", navSeq: 0 }]]));
     // 未 bump:navSeq 0 === pageNavSeq 0 → 正常 ref,失败直接抛错;
-    // 唯一的 evaluate 是失败遥测探测(非重锚定扫描)
+    // evaluate = 失败遥测探测 1 + 弹窗仲裁 1(未发版;非重锚定扫描)
     await expect(resolveTargetLocator(page, { ref: "e1" })).rejects.toThrow("已失效");
-    expect((page.evaluate as any).mock.calls.length).toBe(1);
+    expect((page.evaluate as any).mock.calls.length).toBe(2);
   });
 
   it("扫描截断(超大页面)不重锚定,维持原错误", async () => {

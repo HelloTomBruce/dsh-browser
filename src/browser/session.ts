@@ -12,7 +12,7 @@ export * from "./session/screenshot.js";
 export * from "./session/target.js";
 export * from "./session/semantic.js";
 
-import { clearPageRefs, clearPageMarks, bumpPageNav } from "./session/cache.js";
+import { clearPageRefs, clearPageMarks, bumpPageNav, markStableNav, noteExternalNav } from "./session/cache.js";
 import { HUMAN_BINDING, handleHumanEvent, installHumanRecorder } from "./session/recorder.js";
 import { sessionTracer } from "./session/tracer.js";
 import { screencastManager } from "./session/screencast.js";
@@ -173,6 +173,9 @@ const DOM_COMPAT_SCRIPT = `
 })();
 `;
 
+/** 最近一次工具触碰时间戳(getPage 打点):外部导航判定基准。 */
+let lastToolTouchAt = 0;
+
 export function attachPage(page: Page, config: BrowserConfig): void {
   const timeoutMs = config.timeoutMs ?? 30000;
   page.setDefaultTimeout(timeoutMs);
@@ -200,6 +203,11 @@ export function attachPage(page: Page, config: BrowserConfig): void {
     const url = frame.url();
     if (!url || url === "about:blank") return;
     recordNav(profile, url);
+    // 外部导航判定(启发式):距上次工具触碰 >10s 的导航记疑似外部
+    // (页面自动跳转或人工操作);工具自身引发的导航刚在 getPage 打过点,不误报。
+    if (Date.now() - lastToolTouchAt > 10_000) {
+      noteExternalNav(page, url);
+    }
   });
   page.on("load", () => {
     const list = historyOf(profile);
@@ -483,6 +491,9 @@ export async function newPage(config: BrowserConfig): Promise<Page> {
 
 /** 返回当前活动页面(没有则新建),并保证浏览器已启动。 */
 export async function getPage(config: BrowserConfig): Promise<Page> {
+  // 工具触碰打点(外部导航判定用):任何工具先 getPage,期间发生的导航
+  // 视为工具自身引发,不会误报"外部导航"
+  lastToolTouchAt = Date.now();
   const state = stateOf();
   if (state.browser === null && state.context === null) await launchProfile(currentProfile, config);
   pruneClosedPages(state);
@@ -556,6 +567,8 @@ export async function closeBrowser(): Promise<void> {
 
 /** Best-effort current page identity, safe when nothing is open.title 有界防页面忙时挂起。 */
 export async function pageIdentity(page: Page) {
+  // 稳定代际打点:所有交互工具成功返回都会经过这里,navSinceStable 以此为基准
+  markStableNav(page);
   try {
     const title = await new Promise<string>((resolve, reject) => {
       const t = setTimeout(() => reject(new Error("title timeout")), 2_000);

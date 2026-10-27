@@ -2,6 +2,7 @@
 export * from "./types.js";
 export * from "./dom.js";
 export * from "./dialog.js";
+export * from "./ui-library.js";
 export * from "./select.js";
 export * from "./virtual.js";
 export * from "./editor.js";

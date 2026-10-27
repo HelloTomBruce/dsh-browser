@@ -67,17 +67,50 @@ describe("通用 Web 交互原语 (UI Primitives)", () => {
       expect(selectors).toContain(".el-dialog");
     });
 
-    it("getActiveDialog 应定位顶层弹窗容器", () => {
+    it("getActiveDialog 兜底回退 domOrder(evaluate 不可用/失败),保持 last() 旧行为", async () => {
       const mockLocator: any = {
         last: vi.fn().mockReturnValue("top-dialog"),
         first: vi.fn().mockReturnValue("top-dialog"),
       };
       const mockPage: any = {
         locator: vi.fn().mockReturnValue(mockLocator),
+        evaluate: vi.fn().mockRejectedValue(new Error("no evaluate")),
       };
-      const dialog = getActiveDialog(mockPage);
-      expect(dialog).toBe("top-dialog");
+      const dialog = (await getActiveDialog(mockPage))!;
+      expect(dialog.via).toBe("domOrder");
+      expect(dialog.locator).toBe("top-dialog");
       expect(mockPage.locator).toHaveBeenCalledWith(getActiveDialogSelectors());
+    });
+
+    it("getActiveDialog z-index 通道:仲裁命中返回唯一 selector 构造的 Locator", async () => {
+      const winner: any = {
+        count: vi.fn().mockResolvedValue(1),
+        first: vi.fn().mockReturnThis(),
+      };
+      const mockPage: any = {
+        evaluate: vi.fn().mockResolvedValue({ selector: ".ant-modal", z: 1000, tier: "precise" }),
+        locator: vi.fn().mockReturnValue(winner),
+      };
+      const dialog = (await getActiveDialog(mockPage))!;
+      expect(dialog.via).toBe("zIndex");
+      expect(dialog.z).toBe(1000);
+      expect(dialog.tier).toBe("precise");
+      expect(mockPage.locator).toHaveBeenCalledWith(".ant-modal");
+    });
+
+    it("getActiveDialog 仲裁结果复核计数为 0 时回退 domOrder", async () => {
+      const gone: any = { count: vi.fn().mockResolvedValue(0) };
+      const fallback: any = {
+        last: vi.fn().mockReturnValue("fallback-dialog"),
+        first: vi.fn().mockReturnValue("fallback-dialog"),
+      };
+      const mockPage: any = {
+        evaluate: vi.fn().mockResolvedValue({ selector: ".gone-modal", z: 10, tier: "fuzzy" }),
+        locator: vi.fn().mockImplementation((sel: string) => (sel === ".gone-modal" ? gone : fallback)),
+      };
+      const dialog = (await getActiveDialog(mockPage))!;
+      expect(dialog.via).toBe("domOrder");
+      expect(dialog.locator).toBe("fallback-dialog");
     });
   });
 

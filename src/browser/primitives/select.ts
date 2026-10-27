@@ -1,6 +1,7 @@
 // dsh-browser · 通用下拉选择状态机原语 (Universal Portal Select Primitive)
 import type { Locator } from "playwright-core";
 import { withTimeout } from "../tools/common.js";
+import { GENERIC, LIBRARY_DROPDOWN_CONTAINERS, LIBRARY_DROPDOWN_OPTIONS } from "./ui-library.js";
 import { waitForDOMQuiescence } from "./dom.js";
 import type { SelectContext, SelectResult } from "./types.js";
 
@@ -39,12 +40,12 @@ export async function executeUniversalSelect(ctx: SelectContext): Promise<Select
   // a) 若定位到的是 label 或 form-item 容器、前置文本 span/td 等，下钻或寻获关联的下拉组件
   let resolvedTarget = target;
   const isLabelOrContainer = await withTimeout(
-    target.evaluate((el) => {
+    target.evaluate((el, hosts: string) => {
       const tag = el.tagName.toLowerCase();
       if (tag === "label") return true;
       const cls = typeof el.className === "string" ? el.className : "";
       if (/(?:form-item|form__item|form-group)/i.test(cls)) return true;
-      if (el.closest("label, [class*='form-item'], [class*='form__item'], [class*='form-group']")) {
+      if (el.closest(hosts)) {
         return !el.matches("[role='combobox'], select, [class*='select-selector']");
       }
       // 非标文本节点 (如 span/div/td/th)
@@ -52,7 +53,7 @@ export async function executeUniversalSelect(ctx: SelectContext): Promise<Select
         return true;
       }
       return false;
-    }),
+    }, GENERIC.formItemHosts),
     1_500,
     "探测 label 或非标文本容器",
   ).catch(() => false);
@@ -107,11 +108,11 @@ export async function executeUniversalSelect(ctx: SelectContext): Promise<Select
   // 3. 多选清理支持 (当指定 clear: true 时先清除已有选中标签)
   if (clear) {
     try {
-      const clearBtn = actualTarget.locator("[class*='clear'], [aria-label*='clear']").first();
+      const clearBtn = actualTarget.locator(GENERIC.dropdownClearButtons).first();
       if ((await clearBtn.count().catch(() => 0)) > 0 && (await clearBtn.isVisible().catch(() => false))) {
         await clearBtn.click({ timeout: 1000 }).catch(() => {});
       } else {
-        const removeBtns = actualTarget.locator("[class*='remove'], [class*='close'], [aria-label*='close']");
+        const removeBtns = actualTarget.locator(GENERIC.dropdownRemoveButtons);
         const removeCount = await removeBtns.count().catch(() => 0);
         for (let i = 0; i < removeCount; i++) {
           await removeBtns.nth(0).click({ timeout: 500 }).catch(() => {});
@@ -122,32 +123,36 @@ export async function executeUniversalSelect(ctx: SelectContext): Promise<Select
     }
   }
 
-  // 4. 状态判定：检查当前是否已处于展开状态
-  const isExpanded = await withTimeout(
-    actualTarget.evaluate((el) => {
-      if (el.getAttribute("aria-expanded") === "true") return true;
-      const host = el.closest("[role='combobox'], [class*='select']") || el;
-      if (host && host.getAttribute("aria-expanded") === "true") return true;
-      const cls = (host?.className || "") + " " + (el.className || "");
-      if (/\b(?:open|is-focus|is-active)\b/i.test(cls) || cls.includes("-open")) return true;
+  // 4. 状态判定:检查当前是否已处于展开状态(探针复用:5.5 步点击后还要复核)
+  const probeExpanded = (): Promise<boolean> =>
+    withTimeout(
+      actualTarget.evaluate((el) => {
+        if (el.getAttribute("aria-expanded") === "true") return true;
+        const host = el.closest("[role='combobox'], [class*='select']") || el;
+        if (host && host.getAttribute("aria-expanded") === "true") return true;
+        const cls = (host?.className || "") + " " + (el.className || "");
+        if (/\b(?:open|is-focus|is-active)\b/i.test(cls) || cls.includes("-open")) return true;
 
-      const inner = host?.querySelector("input[role='combobox'], [aria-expanded]");
-      if (inner?.getAttribute("aria-expanded") === "true") return true;
+        const inner = host?.querySelector("input[role='combobox'], [aria-expanded]");
+        if (inner?.getAttribute("aria-expanded") === "true") return true;
 
-      const controlsId = el.getAttribute("aria-controls") || el.getAttribute("aria-owns");
-      if (controlsId) {
-        const dd = document.getElementById(controlsId);
-        if (dd && dd.offsetParent !== null) return true;
-      }
-      return false;
-    }),
-    2_000,
-    "检查下拉展开状态",
-  ).catch(() => false);
+        const controlsId = el.getAttribute("aria-controls") || el.getAttribute("aria-owns");
+        if (controlsId) {
+          const dd = document.getElementById(controlsId);
+          if (dd && dd.offsetParent !== null) return true;
+        }
+        return false;
+      }),
+      2_000,
+      "检查下拉展开状态",
+    ).catch(() => false);
+
+  const isExpanded = await probeExpanded();
 
   // 5. 点击展开下拉浮层
+  let expandSignalMissed = false;
   if (!isExpanded) {
-    const triggerChild = actualTarget.locator("[class*='selector'], [role='combobox']").first();
+    const triggerChild = actualTarget.locator(GENERIC.dropdownTriggerParts).first();
     let clicked = false;
     if ((await triggerChild.count().catch(() => 0)) > 0) {
       await triggerChild.click({ timeout: 2000 }).catch(async () => {
@@ -161,7 +166,12 @@ export async function executeUniversalSelect(ctx: SelectContext): Promise<Select
       });
     }
     await page.waitForTimeout(120);
+    // 5.5 展开信号复核:force 点击机械成功但浮层未真正展开(被遮罩/触发器未响应)时,
+    // 收短后续选项等待并给空态错误补充归因;非标组件无展开信号不受影响
+    // (portal 选项发现不依赖信号,只是等待从 5s 收短到 1.5s)。
+    expandSignalMissed = !(await probeExpanded());
   }
+  const optionWaitMs = expandSignalMissed ? 1_500 : Math.min(timeout, 5_000);
 
   // 6. 定位关联的浮层容器: 支持 aria-controls 绑定与 Portal 浮层定位
   const controlsId = await withTimeout(
@@ -181,10 +191,9 @@ export async function executeUniversalSelect(ctx: SelectContext): Promise<Select
     "解析下拉关联 controlsId",
   ).catch(() => "");
 
-  const optionSelector =
-    "[role='option']:not([style*='height: 0px']):not([class*='empty']), [class*='item-option']:not([class*='empty']), [class*='select-dropdown'] li:not([class*='empty'])";
-  const dropdownSelector =
-    "[role='listbox']:not([style*='display: none']), [class*='select-dropdown']:not([style*='display: none']):not([class*='hidden']), [class*='popper']:not([style*='display: none'])";
+  // 标准层自带 + 库精确层/通用子串层来自 ui-library 注册表合成
+  const optionSelector = ["[role='option']:not([style*='height: 0px']):not([class*='empty'])", ...LIBRARY_DROPDOWN_OPTIONS].join(", ");
+  const dropdownSelector = ["[role='listbox']:not([style*='display: none'])", ...LIBRARY_DROPDOWN_CONTAINERS].join(", ");
 
   let options: Locator;
   let targetDropdown: Locator | null = null;
@@ -208,7 +217,7 @@ export async function executeUniversalSelect(ctx: SelectContext): Promise<Select
     options = (await visual.count().catch(() => 0)) > 0 ? visual : dropdown.locator(optionSelector);
   }
 
-  await options.first().waitFor({ state: "visible", timeout: Math.min(timeout, 5_000) }).catch(() => {});
+  await options.first().waitFor({ state: "visible", timeout: optionWaitMs }).catch(() => {});
 
   // 7. 读取候选选项文本
   const entries = await options
@@ -227,15 +236,19 @@ export async function executeUniversalSelect(ctx: SelectContext): Promise<Select
 
   // 8. 空数据诊断与安全收起 (严禁使用全局 Escape 避免误关外层弹窗)
   if (visibleTexts.length === 0) {
-    const emptySelector = "[class*='empty'], [class*='no-data'], [role='status'], [class*='item-empty']";
+    const emptySelector = GENERIC.emptyStates;
     const isEmpty = targetDropdown !== null
       ? await targetDropdown.locator(emptySelector).first().isVisible().catch(() => false)
       : false;
     await actualTarget.click({ timeout: 1000 }).catch(() => {});
+    // 展开信号缺失时补充归因:触发器点击疑似未生效(典型:透明遮罩拦截 force 点击)
+    const attribution = expandSignalMissed
+      ? ";触发器点击疑似未生效(展开信号缺失,可能被透明遮罩拦截,建议 browser_snapshot 核实或配合 click effect 验证)"
+      : "";
     if (isEmpty) {
-      throw new Error(`下拉浮层当前无选项(数据为空态/无可选数据): ${label}`);
+      throw new Error(`下拉浮层当前无选项(数据为空态/无可选数据): ${label}${attribution}`);
     }
-    throw new Error(`点击 ${label} 后未出现下拉选项(选项列表为空态)`);
+    throw new Error(`点击 ${label} 后未出现下拉选项(选项列表为空态)${attribution}`);
   }
 
   // 9. 选项匹配: 精准 -> 去空格 -> 大小写不敏感 -> 包含匹配

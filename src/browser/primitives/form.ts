@@ -1,6 +1,7 @@
 // dsh-browser · 通用表单填充原语 (Universal Form Filling Primitive)
 import type { Page } from "playwright-core";
 import { executeUniversalSelect } from "./select.js";
+import { GENERIC } from "./ui-library.js";
 import type { FormFieldItem } from "./types.js";
 
 export async function fillFormFieldHelper(
@@ -13,9 +14,8 @@ export async function fillFormFieldHelper(
 
   try {
     // 1. 基于 Label 定位包含该文字的表单包装容器 (支持常见 -form-item / form-group 结构)
-    const formItems = root.locator(
-      "[class*='form-item'], [class*='form__item'], [role='group'], .form-group",
-    );
+    // ui-library 注册表(注意:统一到含 form 元素的超集,原串缺 form 属历史偶然)
+    const formItems = root.locator(GENERIC.formItemContainers);
     const count = await formItems.count().catch(() => 0);
 
     for (let i = 0; i < count; i++) {

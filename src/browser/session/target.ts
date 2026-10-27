@@ -1,7 +1,7 @@
 // dsh-browser · 统一目标定位解析门面 (Target Resolution Pipeline)
 import type { Frame, Locator, Page } from "playwright-core";
 import { extractElementLabel, getActiveDialog } from "../primitives/index.js";
-import { pageMark, pageRef, pageRefsOf, setPageRefs, pageNavSeq, remapRefs, noteReanchorAttempt, reanchorAttempted } from "./cache.js";
+import { pageMark, pageRef, pageRefsOf, setPageRefs, pageNavSeq, remapRefs, noteReanchorAttempt, reanchorAttempted, navSinceStable } from "./cache.js";
 import { withTimeout, lcsScore } from "../tools/common.js";
 import { resolveSemanticTarget, semanticMissMessage, scanAllInteractive } from "./semantic.js";
 import { injectWalker } from "../walker.js";
@@ -71,6 +71,43 @@ const failureContextProbe = injectWalker<unknown, { dialogActive: boolean; hasSh
     }
   }
   return { dialogActive: Boolean(document.querySelector(dialogSel)), hasShadow };
+});
+
+/**
+ * selector 零命中时的相似属性探针(best-effort):提取首个属性片段(或 #id)
+ * 做包含匹配计数——直接暴露「锚点属性全失效」与「组合选择器其他部分写错」两种病因。
+ * 纯提示用途,失败/无属性片段返回空串。
+ */
+const similarAttrProbe = injectWalker<string, string>((rawSelector: string) => {
+  let attr = "";
+  let val = "";
+  const m = rawSelector.match(/\[([\w-]+)(?:\^|\$|\*|~)?=['"]([^'"]+)['"]\]/);
+  if (m !== null) {
+    attr = m[1] ?? "";
+    val = m[2] ?? "";
+  } else {
+    const idm = rawSelector.match(/^#([\w-]+)/);
+    if (idm !== null) {
+      attr = "id";
+      val = idm[1] ?? "";
+    }
+  }
+  if (attr === "" || val === "") return "";
+  try {
+    const safe = val.replace(/["\\]/g, "");
+    if (safe === "") return "";
+    const hits = Array.from(document.querySelectorAll(`[${attr}*="${safe}"]`)).slice(0, 50);
+    if (hits.length === 0) return `页面不存在任何 ${attr} 含 "${safe}" 的元素(锚点属性可能已失效或页面已切换)`;
+    const samples = hits
+      .slice(0, 3)
+      .map((el) => el.getAttribute(attr) || "")
+      .filter((s) => s !== "")
+      .join(" | ")
+      .slice(0, 120);
+    return `页面存在 ${hits.length} 个 ${attr} 含 "${safe}" 的元素(组合选择器的其他部分可能写错)${samples !== "" ? `,如: ${samples}` : ""}`;
+  } catch {
+    return "";
+  }
 });
 
 /** ref 坐标兜底的名称相似判定:去空白互相包含,或 LCS 占比 ≥ 0.6。 */
@@ -213,12 +250,13 @@ export async function resolveTargetLocator(
     // 降级 1: 若在主页面且有激活的 Modal 弹窗，优先在弹窗容器内检索防穿透
     if (!isIFrame) {
       try {
-        const activeDialog = getActiveDialog(page);
-        if (activeDialog && typeof activeDialog.getByRole === "function") {
+        const activeDialog = await getActiveDialog(page);
+        const dlg = activeDialog?.locator;
+        if (dlg && typeof dlg.getByRole === "function") {
           const inDialog =
             entry.name !== ""
-              ? activeDialog.getByRole(entry.role as any, { name: buildFlexibleTextPattern(entry.name) }).first()
-              : activeDialog.getByRole(entry.role as any).first();
+              ? dlg.getByRole(entry.role as any, { name: buildFlexibleTextPattern(entry.name) }).first()
+              : dlg.getByRole(entry.role as any).first();
 
           if ((await withTimeout(inDialog.count(), 1_000, "弹窗内 role 查找").catch(() => 0)) > 0) {
             return { locator: inDialog, container, entry, isIFrame: false };
@@ -363,10 +401,33 @@ export async function resolveTargetLocator(
   // 替代 snapshot → find → click 三轮往返。仅当 selector/ref/mark/row 均缺省时启用。
   const what = args.what;
   if (typeof what === "string" && what.trim() !== "" && args.selector === undefined && args.ref === undefined && args.mark === undefined && rowPattern === undefined) {
+    // 页面漂移防护:入口记指纹(navSeq + url),扫描返回后复核——扫描窗口内页面
+    // 发生导航则结果作废,杜绝「旧页面扫描结果点到新页面」的竞态。
+    // url 取不到(极端竞态)时仅靠 navSeq 复核,不放大错误。
+    const navSeqBefore = pageNavSeq(page);
+    let urlBefore: string | null = null;
+    try {
+      urlBefore = page.url();
+    } catch {
+      /* url 不可用:仅靠 navSeq 复核 */
+    }
     const res = await resolveSemanticTarget(page, what, {
       scope: typeof args.scope === "string" && args.scope !== "" ? args.scope : undefined,
       preferredRoles: opts.preferredRoles,
     });
+    let urlAfter = urlBefore;
+    try {
+      urlAfter = page.url();
+    } catch {
+      /* 同上 */
+    }
+    if (pageNavSeq(page) !== navSeqBefore || urlAfter !== urlBefore) {
+      const raceErr = new Error(
+        `页面在语义定位过程中发生变化(${urlBefore} → ${page.url()}),本次扫描结果已作废;请重试或重新 browser_snapshot`,
+      );
+      (raceErr as any).locationFailure = { phase: "navRace", candidates: 0, dialogActive: false, hasShadow: false };
+      throw raceErr;
+    }
     if (!("candidates" in res)) return res;
     // 二次兜底:walker role 推断失灵的自定义组件,按常见 role + 弹性文本尝试
     for (const role of ["button", "link", "tab", "menuitem", "option"]) {
@@ -429,6 +490,18 @@ export async function resolveTargetLocator(
     } catch {
       /* keep defaults */
     }
+    // 页面漂移上下文(零 round-trip):距最近成功操作的导航差值 ≥1 时,
+    // 提示 what 目标可能在另一页面(实测:what 在漂移后的页面命中同名元素/空态)
+    const navDelta = navSinceStable(page);
+    if (navDelta >= 1) {
+      let route = "";
+      try {
+        route = page.url().slice(0, 80);
+      } catch {
+        /* url 不可用时省略路由信息 */
+      }
+      (err as any).message = `${(err as any).message};页面自上次成功操作后已发生 ${navDelta} 次导航,what 目标可能在另一页面${route !== "" ? `(当前: ${route})` : ""}`;
+    }
     throw err;
   }
 
@@ -462,9 +535,10 @@ export async function resolveTargetLocator(
 
   // 1. 若当前页面存在激活的 Modal / Dialog，优先检查弹窗内是否有匹配目标(防穿透)
   try {
-    const activeDialog = getActiveDialog(page);
-    if (activeDialog && typeof activeDialog.locator === "function") {
-      const inDialog = activeDialog.locator(rawSelector);
+    const activeDialog = await getActiveDialog(page);
+    const dlg = activeDialog?.locator;
+    if (dlg && typeof dlg.locator === "function") {
+      const inDialog = dlg.locator(rawSelector);
       if (typeof inDialog.count === "function") {
         const inDialogCount = await withTimeout(inDialog.count(), 1_000, "弹窗内 selector 探测").catch(() => 0);
         if (inDialogCount > 0) {
@@ -493,7 +567,43 @@ export async function resolveTargetLocator(
   let target = typeof baseLocator.first === "function" ? baseLocator.first() : baseLocator;
 
   if (typeof baseLocator.count === "function") {
-    totalCount = await withTimeout(baseLocator.count(), 2_000, "selector 计数").catch(() => 0);
+    try {
+      totalCount = await withTimeout(baseLocator.count(), 2_000, "selector 计数");
+    } catch {
+      // 计数超时 ≠ 确认零命中:页面可能正忙/大 DOM。抛可重试错误,不再静默归 0 放行。
+      const err = new Error(
+        `selector 计数超时: ${rawSelector}(页面可能正忙或 DOM 过大,可重试;若持续超时建议 browser_snapshot 核实页面状态)`,
+      );
+      (err as any).locationFailure = { phase: "countTimeout", candidates: 0, dialogActive: false, hasShadow: false };
+      throw err;
+    }
+    if (totalCount === 0) {
+      // 零命中不放行:空 locator 交给下游只会以更慢更模糊的方式失败(click 靠超时
+      // 诊断慢一轮,type 曾直接向错误焦点盲打)。has-text 弹性自愈已在上方完成。
+      const zeroMatchErr = new Error(
+        `selector 未命中: ${rawSelector}(元素未渲染/选择器写错/页面已切换;可用 browser_elements 探查表单结构、browser_wait_for 等元素出现,或 browser_snapshot 取 ref)`,
+      );
+      (zeroMatchErr as any).locationFailure = { phase: "zeroMatch", candidates: 0, dialogActive: false, hasShadow: false };
+      // best-effort 页面特征与相似属性候选(失败路径多两次 evaluate 可接受,不放大错误)
+      try {
+        const ctx = await withTimeout(page.evaluate(failureContextProbe, undefined), 1_500, "失败特征探测");
+        if (ctx !== null && typeof ctx === "object") {
+          (zeroMatchErr as any).locationFailure = { phase: "zeroMatch", candidates: 0, ...(ctx as any) };
+        }
+      } catch {
+        /* keep defaults */
+      }
+      try {
+        const hint = await withTimeout(page.evaluate(similarAttrProbe, rawSelector), 1_500, "相似属性探测");
+        if (typeof hint === "string" && hint !== "") {
+          (zeroMatchErr as any).similarHint = hint;
+          (zeroMatchErr as any).message = `${(zeroMatchErr as any).message};${hint}`;
+        }
+      } catch {
+        /* best-effort */
+      }
+      throw zeroMatchErr;
+    }
     if (totalCount > 0 && typeof baseLocator.locator === "function") {
       const visibleLocator = baseLocator.locator("visible=true");
       if (typeof visibleLocator.count === "function") {

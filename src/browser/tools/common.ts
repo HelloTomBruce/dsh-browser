@@ -1,14 +1,9 @@
 // dsh-browser · 浏览器工具 — 通用工具函数与算法
 import { isAbsolute, resolve } from "node:path";
+import { GENERIC } from "../primitives/ui-library.js";
 
-/** 组件库下拉框的可见选项选择器并集 (基于通用 WAI-ARIA 与主流组件库规范)。 */
-export const DROPDOWN_OPTION_SELECTOR = [
-  "[role='option']",
-  "[role='menuitem']",
-  "[class*='select'][class*='dropdown'] [class*='option']",
-  "[class*='select'][class*='dropdown'] [class*='item']",
-  "[role='listbox'] [role='option']",
-].join(", ");
+/** 组件库下拉框的可见选项枚举(ui-library 注册表单一来源,值与抽取前等价)。 */
+export const DROPDOWN_OPTION_SELECTOR = GENERIC.dropdownOptionEnumeration;
 
 /** 读取 PNG 文件头(IHDR)中的宽高,不解码像素(导出供测试)。 */
 export function pngSize(buf: Buffer): { width: number; height: number } {
@@ -404,3 +399,28 @@ export function buildEvalScript(script: string): EvalWrapResult {
 // 自动推断字段结构,返回可直接交给抽取模式的 fields + 样本数据;
 // 推断不出规律结构时返回原因与容器概览,不猜。
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// 页面预期校验(未发版,expectUrl opt-in):click/type/select 定位前校验当前
+// URL,把「页面被人工切换/路由漂移」从诡异的语义 miss/空态变为一句话可诊断错误。
+// 正则优先,非法正则按子串;不传零开销零破坏。
+// ---------------------------------------------------------------------------
+export async function assertExpectedUrl(
+  page: { url(): string },
+  expectUrl: unknown,
+  action: string,
+): Promise<void> {
+  if (typeof expectUrl !== "string" || expectUrl === "") return;
+  const current = page.url();
+  let hit: boolean;
+  try {
+    hit = new RegExp(expectUrl).test(current);
+  } catch {
+    hit = current.includes(expectUrl);
+  }
+  if (!hit) {
+    throw new Error(
+      `${action} 前置校验失败: expectUrl "${expectUrl}" 与当前页面不符(当前: ${current})——页面可能被切换/回退,请先 browser_snapshot 确认后再操作`,
+    );
+  }
+}

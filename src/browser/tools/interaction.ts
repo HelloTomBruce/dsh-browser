@@ -8,10 +8,10 @@ import {
   getPage, activePage, pageRef, pageIdentity,
   savedForms, lastFormFields, setLastFormFields,
   downloadsOf, currentProfile, networkEntries,
-  targetLocator, resolveTargetLocator,
+  targetLocator, resolveTargetLocator, drainExternalNavWarning,
 } from "../session.js";
 import { workspaceBaseDir } from "../../lib/tools.js";
-import { withTimeout, unwrapDoubleEncodedScript, workspaceFilePath, buildEvalScript } from "./common.js";
+import { withTimeout, unwrapDoubleEncodedScript, workspaceFilePath, buildEvalScript, assertExpectedUrl } from "./common.js";
 import { somFallbackShot } from "./inspection.js";
 import {
   isElementDisabled,
@@ -85,6 +85,9 @@ async function enrichSemanticMiss(
 
 export async function clickTool(config: BrowserConfig, args: Record<string, any>, exec?: ToolRunContext) {
   const page = await getPage(config);
+  // 页面漂移防护:expectUrl 前置校验(opt-in)+ 外部导航告警(一次性 drain)
+  await assertExpectedUrl(page, args.expectUrl, "click");
+  const extWarning = drainExternalNavWarning(page);
   let targetRes;
   try {
     targetRes = await resolveTargetLocator(page, args);
@@ -229,6 +232,7 @@ export async function clickTool(config: BrowserConfig, args: Record<string, any>
       clicked: String(args.ref ?? args.selector ?? args.mark ?? args.what ?? (args.row ? `row: ${args.row}` : "target")),
       effect,
       ...(quiet ? { effectHint: "点击后未观察到任何 DOM/URL/网络变化,可能未生效(被遮挡/事件被吞/前置条件未满足);建议 browser_snapshot 核实或换目标" } : {}),
+      ...(extWarning !== undefined ? { warning: extWarning } : {}),
       ...ambiguityFields(targetRes),
       ...(targetRes.viaBridge === true ? { viaBridge: true } : {}),
       ...(await pageIdentity(page)),
@@ -237,6 +241,7 @@ export async function clickTool(config: BrowserConfig, args: Record<string, any>
 
   return {
     clicked: String(args.ref ?? args.selector ?? args.mark ?? args.what ?? (args.row ? `row: ${args.row}` : "target")),
+    ...(extWarning !== undefined ? { warning: extWarning } : {}),
     ...ambiguityFields(targetRes),
     ...(targetRes.viaBridge === true ? { viaBridge: true } : {}),
     ...(await pageIdentity(page)),
@@ -245,6 +250,9 @@ export async function clickTool(config: BrowserConfig, args: Record<string, any>
 
 export async function typeTool(config: BrowserConfig, args: Record<string, any>) {
   const page = await getPage(config);
+  // 页面漂移防护:expectUrl 前置校验(opt-in)+ 外部导航告警(一次性 drain)
+  await assertExpectedUrl(page, args.expectUrl, "type");
+  const extWarning = drainExternalNavWarning(page);
   const targetRes = await resolveTargetLocator(page, args, { preferredRoles: ["textbox", "searchbox", "spinbutton"] });
   const target = targetRes.locator;
   const strictErr = strictReject(args, targetRes);
@@ -261,13 +269,18 @@ export async function typeTool(config: BrowserConfig, args: Record<string, any>)
     if (handled) {
       return {
         typed: true,
-        editor: true,
+        typedVia: "editor" as const,
         selector,
         ...ambiguityFields(targetRes),
         ...(await pageIdentity(page)),
       };
     }
   }
+
+  // 输入通道:fill(清空重填)/ clicked(正常点击获得焦点)/ focus-kept(click 双失败
+  // 但焦点恰在目标内,续打)/ editor(上方已提前返回)
+  let typedVia: "fill" | "clicked" | "focus-kept" = "clicked";
+  let focusedElement: string | undefined;
 
   if (args.clear === true) {
     if (isHuman) {
@@ -276,19 +289,49 @@ export async function typeTool(config: BrowserConfig, args: Record<string, any>)
     } else {
       await target.fill(text, { timeout: args.timeoutMs ?? config.timeoutMs });
     }
+    typedVia = "fill";
   } else {
     // 多命中或 strict 时不再 force 降级点击:遮罩拦截(如 Modal 背景的同名输入框)
     // 必须暴露出来,而不是被 force 抹平后静默打进错误目标
     const ambiguous = args.strict === true || (targetRes.matchedCount ?? 0) > 1;
+    let clickOk = false;
     try {
       await target.click({ timeout: Math.min(args.timeoutMs ?? config.timeoutMs, 5_000) });
+      clickOk = true;
     } catch (e) {
       if (ambiguous) {
         throw new Error(
           `type 定位目标存在歧义(命中 ${targetRes.matchedCount ?? "?"} 个元素)且首个不可交互,已中止;请用 scope 限定或 browser_snapshot 取 ref 消歧;原始错误: ${e instanceof Error ? e.message : String(e)}`,
         );
       }
-      await target.click({ timeout: 2_000, force: true }).catch(() => {});
+      try {
+        await target.click({ timeout: 2_000, force: true });
+        clickOk = true;
+      } catch {
+        /* force 也失败:交给焦点归属校验,不再无条件盲打 */
+      }
+    }
+    if (!clickOk) {
+      // click 双重失败后的焦点归属校验:焦点在目标内(contains 放宽,兼容 antd/element
+      // 点击 wrapper 后焦点落在内部 input 的复合控件)才继续输入;否则中止并给出
+      // 当前焦点线索。open shadow 下 activeElement 为 host,=== 分支天然覆盖。
+      const probe = await withTimeout(
+        target.evaluate((el) => {
+          const ae = document.activeElement;
+          if (ae === null) return { owns: false, desc: null as string | null };
+          const owns = ae === el || el.contains(ae);
+          return { owns, desc: (ae as HTMLElement).outerHTML.slice(0, 200) };
+        }),
+        2_000,
+        "焦点归属探测",
+      ).catch(() => ({ owns: false, desc: null as string | null }));
+      focusedElement = probe.desc ?? undefined;
+      if (!probe.owns) {
+        throw new Error(
+          `type 目标不可点击且焦点不在目标上,已中止输入(避免盲打到错误输入框)。当前焦点: ${focusedElement ?? "(无法探测/无焦点)"};目标: ${String(args.ref ?? args.selector ?? args.what ?? "")}。建议 browser_snapshot 核实目标状态,或 browser_wait_for 等元素可交互`,
+        );
+      }
+      typedVia = "focus-kept";
     }
     if (isHuman) {
       await humanType(page, text, { speed: config.humanizeSpeed });
@@ -299,6 +342,9 @@ export async function typeTool(config: BrowserConfig, args: Record<string, any>)
   if (args.submit === true) await page.keyboard.press("Enter");
   return {
     typed: true,
+    typedVia,
+    ...(focusedElement !== undefined ? { focusedElement } : {}),
+    ...(extWarning !== undefined ? { warning: extWarning } : {}),
     selector: String(args.ref ?? args.selector),
     submit: args.submit === true,
     ...ambiguityFields(targetRes),
@@ -310,6 +356,11 @@ export async function pressTool(config: BrowserConfig, args: Record<string, any>
   const page = await getPage(config);
   const key = String(args.key);
   let warning: string | undefined;
+  // 外部导航告警(一次性 drain),与 Escape 保护 warning 合并透出
+  const extWarning = drainExternalNavWarning(page);
+  if (extWarning !== undefined) {
+    warning = warning !== undefined ? `${warning};${extWarning}` : extWarning;
+  }
 
   // Escape 保护逻辑：当用户未指定具体 selector/ref 全局按 Escape 时，
   // 检查是否可能误关带有 closeOnEsc 的 Modal/Dialog
@@ -378,6 +429,9 @@ export async function pressTool(config: BrowserConfig, args: Record<string, any>
  */
 export async function selectTool(config: BrowserConfig, args: Record<string, any>) {
   const page = await getPage(config);
+  // 页面漂移防护:expectUrl 前置校验(opt-in)+ 外部导航告警(一次性 drain)
+  await assertExpectedUrl(page, args.expectUrl, "select");
+  const extWarning = drainExternalNavWarning(page);
   const targetRes = await resolveTargetLocator(page, args, { preferredRoles: ["combobox", "select", "listbox"] });
   const target = targetRes.locator;
   const strictErr = strictReject(args, targetRes);
@@ -401,6 +455,7 @@ export async function selectTool(config: BrowserConfig, args: Record<string, any
   return {
     selected: result.selected,
     selector: label,
+    ...(extWarning !== undefined ? { warning: extWarning } : {}),
     ...ambiguityFields(targetRes),
     ...(await pageIdentity(page)),
   };

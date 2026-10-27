@@ -16,6 +16,7 @@ import { workspaceBaseDir } from "../../lib/tools.js";
 import { injectWalker } from "../walker.js";
 import { compressText, diffLines, topSuggestions, pngSize, DROPDOWN_OPTION_SELECTOR, withTimeout } from "./common.js";
 import { getActiveDialog } from "../primitives/index.js";
+import { GENERIC } from "../primitives/ui-library.js";
 
 // assignRefs 已下沉到 session/cache.ts(findTool 与语义定位共用);此处re-export
 // 保持既有导入路径(../src/browser/tools.js)兼容。
@@ -209,21 +210,27 @@ export async function snapshotTool(config: BrowserConfig, args: Record<string, a
       if (isDialogScope && typeof page.locator === "function") {
         try {
           // 从适配器层动态查询当前活动弹窗/抽屉容器，避免在通用工具层硬编码组件库类名
-          const activeDialogLoc = getActiveDialog(page);
-          const count = typeof activeDialogLoc?.count === "function"
-            ? await withTimeout(activeDialogLoc.count(), 1000, "活动弹窗探测").catch(() => 0)
-            : 0;
-          if (count > 0 && typeof activeDialogLoc.first === "function") {
+          const activeDialogRes = await getActiveDialog(page);
+          const activeDialogLoc = activeDialogRes?.locator;
+          const count =
+            activeDialogLoc !== undefined && typeof activeDialogLoc.count === "function"
+              ? await withTimeout(activeDialogLoc.count(), 1000, "活动弹窗探测").catch(() => 0)
+              : 0;
+          if (activeDialogLoc !== undefined && count > 0 && typeof activeDialogLoc.first === "function") {
             const alternate = await withTimeout(
               activeDialogLoc.first().evaluate((el) => {
+                // role 与首个弹窗类名合并(如 "[role='dialog'].ant-modal"):
+                // 仲裁选中容器节点后两类线索都值得给出
+                const out: string[] = [];
                 const role = el.getAttribute("role");
-                if (role === "dialog") return "[role='dialog']";
+                if (role === "dialog" || role === "alertdialog") out.push(`[role='${role}']`);
                 const cls = el.className;
                 if (typeof cls === "string" && cls.trim()) {
-                  const parts = cls.trim().split(/\s+/);
-                  const relevant = parts.find((c) => /modal|dialog|drawer/i.test(c)) || parts[0];
-                  return `.${relevant}`;
+                  const tokens = cls.trim().split(/\s+/);
+                  const relevant = tokens.find((c) => /modal|dialog|drawer/i.test(c)) || tokens[0];
+                  out.push(`.${relevant}`);
                 }
+                if (out.length > 0) return out.join("");
                 return el.tagName.toLowerCase();
               }),
               1000,
@@ -589,7 +596,7 @@ export async function elementsTool(config: BrowserConfig, args: Record<string, a
   const page = await getPage(config);
   const max = Math.min(Math.max(Number(args.max ?? 60) || 60, 1), 200);
   const data = await page.evaluate(
-    ([maxN, optionSelector]) => {
+    ([maxN, optionSelector, formItemSel, formLabelSel]: readonly [number, string, string, string]) => {
       /** 提取元素的关联 label:aria-label → label[for] → form-item 标签(antd/element)。 */
       function labelOf(el: HTMLElement): string {
         const aria = el.getAttribute("aria-label");
@@ -599,8 +606,8 @@ export async function elementsTool(config: BrowserConfig, args: Record<string, a
           const text = forLabel?.textContent?.trim();
           if (text) return text;
         }
-        const formItem = el.closest("[class*='-form-item'], [class*='__form-item'], form, .form-group");
-        const formLabel = formItem?.querySelector("[class*='label'], label")?.textContent?.trim();
+        const formItem = el.closest(formItemSel);
+        const formLabel = formItem?.querySelector(formLabelSel)?.textContent?.trim();
         if (formLabel) return formLabel.replace(/[*：:]\s*$/, "");
         return "";
       }
@@ -642,7 +649,7 @@ export async function elementsTool(config: BrowserConfig, args: Record<string, a
         .slice(0, 50);
       return { elements: out, dropdownOptions };
     },
-    [max, DROPDOWN_OPTION_SELECTOR] as const,
+    [max, DROPDOWN_OPTION_SELECTOR, GENERIC.formItemContainersStrict, GENERIC.formLabelSimple] as const,
   );
   return { count: data.elements.length, elements: data.elements, dropdownOptions: data.dropdownOptions };
 }

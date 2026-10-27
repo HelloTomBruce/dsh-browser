@@ -226,3 +226,46 @@ describe("定位参数互斥硬校验(ref/mark/what/selector 四选一)", () => 
     expect(res.locator).toBe("solo");
   });
 });
+
+describe("selector 零命中 fail-fast(未发版)", () => {
+  /** 带 count/first/locator 的 locator stub;evaluate 按第二参类型分流(探针模拟)。 */
+  function makePage(countImpl: () => Promise<number>, probeResult: unknown) {
+    const locatorMock: any = {
+      first: () => locatorMock,
+      count: vi.fn(countImpl),
+      locator: vi.fn().mockReturnThis(),
+    };
+    const mockPage: any = {
+      locator: vi.fn().mockReturnValue(locatorMock),
+      evaluate: vi.fn().mockImplementation(async (_fn: unknown, arg?: unknown) =>
+        typeof arg === "string" ? `页面存在 3 个 id 含 "submit" 的元素(测试提示)` : probeResult,
+      ),
+    };
+    return { mockPage: mockPage as unknown as Page, locatorMock };
+  }
+
+  it("零命中直接抛错并挂 locationFailure.phase=zeroMatch 与相似属性提示", async () => {
+    const { mockPage } = makePage(async () => 0, { dialogActive: true, hasShadow: false });
+    const err = await resolveTargetLocator(mockPage, { selector: "[id='submit-btn'] > span" }).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toMatch(/selector 未命中/);
+    expect(err.message).toMatch(/页面存在 3 个 id 含/); // similarHint 并入消息
+    expect(err.locationFailure).toMatchObject({ phase: "zeroMatch", dialogActive: true });
+    expect(err.similarHint).toMatch(/id 含 "submit"/);
+  });
+
+  it("计数超时抛可重试错误(countTimeout),不再静默归 0 放行", async () => {
+    const { mockPage } = makePage(() => new Promise<number>(() => {}), null);
+    const err = await resolveTargetLocator(mockPage, { selector: "#busy" }).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toMatch(/selector 计数超时/);
+    expect(err.locationFailure).toMatchObject({ phase: "countTimeout" });
+  });
+
+  it("命中数 >0 时行为不变(可见仲裁照常)", async () => {
+    const { mockPage } = makePage(async () => 2, { dialogActive: false, hasShadow: false });
+    const res = await resolveTargetLocator(mockPage, { selector: "[id='x']" });
+    expect(res.matchedCount).toBe(2);
+    expect(res.locator).toBeDefined();
+  });
+});

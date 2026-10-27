@@ -288,6 +288,9 @@ export type WalkerApi = ReturnType<typeof __walkerCore>;
 /** walker 核心的序列化源码(模块加载期取一次;tsdown/vitest 均原样保留)。 */
 const CORE_SRC = __walkerCore.toString();
 
+/** walker 核心序列化源(导出供 drift-guard 测试核对表单词表与注册表一致性)。 */
+export const WALKER_CORE_SRC: string = CORE_SRC;
+
 /**
  * 把消费方 entry(自包含函数,签名 (payload, w: WalkerApi) => R)拼装成
  * 可被 page.evaluate 序列化的独立函数 (payload: P) => R。
@@ -297,3 +300,61 @@ export function injectWalker<P, R>(entry: (payload: P, w: WalkerApi) => R): (pay
   const src = `"use strict"; return function (payload) { var __name = (t, v) => t; const w = (${CORE_SRC})(); return (${entry.toString()})(payload, w); };`;
   return new Function(src)() as (payload: P) => R;
 }
+
+// ---------------------------------------------------------------------------
+// 活动弹窗顶层仲裁(未发版,页内单一来源):分层选择器 + 可见性过滤 + 有效 z-index。
+// 消费方 primitives/dialog.ts getActiveDialog。返回唯一 selector(cssPath 语义,
+// 零 DOM 变更)供节点侧构造 Locator。
+// 排序键:(z-index, 同 z 内最外层候选优先, DOM 序后者胜) ——
+//   * 同 z 且有包含关系 → 取最外层容器(否则 .ant-modal-footer 这类子节点会
+//     因"文档序最后"系统性误选为"顶层弹窗");
+//   * 兄弟弹窗同 z → DOM 序后者胜(与 antd 后挂载者在上层的表现一致);
+//   * 不同 z → 高者胜(z-index 沿祖先链取有效值)。
+// ---------------------------------------------------------------------------
+export const pickTopDialog = injectWalker<
+  { precise: string; fuzzy: string },
+  { selector: string; z: number; tier: "precise" | "fuzzy" } | null
+>((payload, w) => {
+  const effectiveZ = (el: Element): number => {
+    let node: Element | null = el;
+    while (node !== null) {
+      const cs = getComputedStyle(node);
+      if (cs.position !== "static" && cs.zIndex !== "auto") {
+        const z = Number.parseInt(cs.zIndex, 10);
+        if (Number.isFinite(z)) return z;
+      }
+      node = w.composedParent(node);
+    }
+    return 0;
+  };
+  const visible = (el: Element): boolean => {
+    if (!(el instanceof HTMLElement)) return false;
+    const cs = getComputedStyle(el);
+    if (cs.display === "none" || cs.visibility === "hidden") return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  };
+  const collect = (sel: string): Element[] => {
+    try {
+      return Array.from(document.querySelectorAll(sel)).filter(visible);
+    } catch {
+      return [];
+    }
+  };
+  let tier: "precise" | "fuzzy" = "precise";
+  let nodes = collect(payload.precise);
+  if (nodes.length === 0) {
+    tier = "fuzzy";
+    nodes = collect(payload.fuzzy);
+  }
+  if (nodes.length === 0) return null;
+  const zs = nodes.map((n) => effectiveZ(n));
+  const maxZ = Math.max(...zs);
+  const top = nodes.filter((n, i) => zs[i] === maxZ);
+  // 同 z 内去掉被其他候选包含的节点(保留最外层容器);全互不含则原样
+  const outermost = top.filter((n) => !top.some((m) => m !== n && m.contains(n)));
+  const pool = outermost.length > 0 ? outermost : top;
+  const winner = pool[pool.length - 1];
+  if (winner === undefined) return null;
+  return { selector: w.cssPath(winner), z: maxZ, tier };
+});

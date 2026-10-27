@@ -264,3 +264,47 @@ export function snapshotVersionEntry(cache: SnapshotCache | undefined, version: 
     ? cache.history[cache.history.length - 1]
     : cache.history.find((e) => e.version === version);
 }
+
+// ---------------------------------------------------------------------------
+// 页面漂移防护(未发版):稳定代际打点 + 外部导航记录。
+// pageIdentity(所有交互工具成功返回都会调用)打 markStableNav —— 记录"最近
+// 一次成功操作时的代际";semantic miss 时用 navSinceStable 提示"页面曾发生过
+// 导航,what 目标可能在另一页面"。外部导航记录由 session 层 framenavigated
+// 监听在「距上次工具触碰 >10s」时写入,交互工具下次成功返回时 drain 成 warning。
+// ---------------------------------------------------------------------------
+
+const lastStableNavSeqs = new WeakMap<Page, number>();
+
+/** 记录"最近一次成功操作"的导航代际(pageIdentity 打点,零成本)。 */
+export function markStableNav(page: Page): void {
+  lastStableNavSeqs.set(page, pageNavSeq(page));
+}
+
+/** 当前代际距最近成功操作代际的差值(≥1 = 期间发生过导航)。 */
+export function navSinceStable(page: Page): number {
+  return pageNavSeq(page) - (lastStableNavSeqs.get(page) ?? pageNavSeq(page));
+}
+
+export interface ExternalNavNote {
+  url: string;
+  at: number;
+}
+
+const externalNavs = new WeakMap<Page, ExternalNavNote[]>();
+
+/** 记录一次疑似外部导航(非工具窗口内发生的 framenavigated)。 */
+export function noteExternalNav(page: Page, url: string): void {
+  const list = externalNavs.get(page) ?? [];
+  list.push({ url, at: Date.now() });
+  if (list.length > 5) list.shift();
+  externalNavs.set(page, list);
+}
+
+/** 读取并清空疑似外部导航记录,拼装 warning 文案;无记录返回 undefined。 */
+export function drainExternalNavWarning(page: Page): string | undefined {
+  const list = externalNavs.get(page);
+  if (list === undefined || list.length === 0) return undefined;
+  externalNavs.delete(page);
+  const urls = list.map((n) => n.url.slice(0, 80)).join(" → ");
+  return `检测到非工具触发的页面导航(页面自动跳转或人工操作:${urls}),此前的定位结果可能基于被切换后的页面,请核实当前页面状态`;
+}

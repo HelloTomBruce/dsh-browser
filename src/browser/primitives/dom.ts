@@ -1,6 +1,7 @@
 // dsh-browser · DOM 原语与物理交互自愈 (DOM & Actionability Primitives)
 import type { Locator, Page } from "playwright-core";
 import { withTimeout } from "../tools/common.js";
+import { GENERIC } from "./ui-library.js";
 import type { QuiescenceOptions } from "./types.js";
 
 /**
@@ -32,13 +33,9 @@ export function extractElementLabel(el: Element): string {
   }
 
   // 3. 通用表单项容器解析 (支持各类 BEM / -item 规范的通用 wrapper)
-  const formItem = el.closest(
-    "[class*='form-item'], [class*='form__item'], [role='group'], form, .form-group",
-  );
+  const formItem = el.closest(GENERIC.formItemContainers);
   if (formItem) {
-    const labelEl = formItem.querySelector(
-      "[class*='form-item-label'], [class*='form-item__label'], [class*='label'], label",
-    );
+    const labelEl = formItem.querySelector(GENERIC.formItemLabels);
     if (labelEl) {
       const txt = ((labelEl as HTMLElement).innerText || labelEl.textContent || "").trim();
       if (txt) return txt;

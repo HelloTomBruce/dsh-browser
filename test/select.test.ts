@@ -253,3 +253,29 @@ describe("selectTool - 组件库下拉框兼容性", () => {
     expect(chosen).toBe("台州");
   });
 });
+
+describe("selectTool - 展开信号复核(未发版)", () => {
+  let page: Page;
+
+  beforeAll(async () => {
+    page = await getPage(config);
+  });
+
+  afterAll(async () => {
+    await closeBrowser();
+  });
+
+  it("触发器点击未生效(无展开信号且无选项):收短等待快速失败并附归因", async () => {
+    await page.setContent(`
+      <div class="some-select" id="dead-select">
+        <div class="some-selector">请选择</div>
+      </div>
+    `);
+    const started = Date.now();
+    await expect(selectTool(config, { selector: "#dead-select", option: "任意项" })).rejects.toThrow(
+      /触发器点击疑似未生效/,
+    );
+    // 展开信号缺失 → 选项等待收短为 1.5s(旧路径为 5s)
+    expect(Date.now() - started).toBeLessThan(6_000);
+  });
+});
