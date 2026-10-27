@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  dragAndDropHelper,
+  dragAndDropLocators,
   fillEditorHelper,
   selectPathHelper,
   fillDateRangeHelper,
@@ -169,12 +169,11 @@ describe("全场景企业级富控件适配矩阵 (Enterprise Component Suite)",
     const mouseEvents: string[] = [];
     const mockPage: any = {
       locator: (sel: string) => ({
-        first: () => ({
-          boundingBox: async () =>
-            sel.includes("source")
-              ? { x: 100, y: 100, width: 50, height: 50 }
-              : { x: 300, y: 300, width: 50, height: 50 },
-        }),
+        boundingBox: async () =>
+          sel.includes("source")
+            ? { x: 100, y: 100, width: 50, height: 50 }
+            : { x: 300, y: 300, width: 50, height: 50 },
+        first: () => mockPage.locator(sel),
       }),
       mouse: {
         move: async () => mouseEvents.push("move"),
@@ -183,8 +182,8 @@ describe("全场景企业级富控件适配矩阵 (Enterprise Component Suite)",
       },
     };
 
-    const res = await dragAndDropHelper(mockPage, "#source", "#target");
-    expect(res).toBe(true);
+    const res = await dragAndDropLocators(mockPage, mockPage.locator("#source"), mockPage.locator("#target"));
+    expect(res).toBe("mouse");
     expect(mouseEvents).toContain("down");
     expect(mouseEvents).toContain("move");
     expect(mouseEvents).toContain("up");

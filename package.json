@@ -43,6 +43,7 @@
     "test:enterprise": "tsx scripts/test-dev-server-enterprise.ts",
     "test:energy": "tsx scripts/test-dev-server-energy.ts",
     "test:shadow": "tsx scripts/test-dev-server-shadow.ts",
+    "test:drag": "tsx scripts/test-dev-server-drag.ts",
     "test:span": "tsx scripts/test-dev-server-clickable-span.ts",
     "test:pick": "tsx scripts/test-panel-pick.ts",
     "test:stream": "tsx scripts/test-panel-stream.ts",

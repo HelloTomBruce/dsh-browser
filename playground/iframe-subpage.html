@@ -55,6 +55,8 @@
     </div>
     <button id="sub-submit-btn" onclick="submitSubFrame()">提交子系统校验</button>
     <div id="sub-status" class="status-msg" style="display: none;">✅ 子系统已完成身份校验并建立安全连接</div>
+    <!-- 跨 Frame 拖拽测试标记:被动监听 mouseup(仅记录,不干扰任何交互) -->
+    <div id="frame-drop-marker" data-received="" style="margin-top:8px;font-size:12px;color:#888"></div>
   </div>
 
   <script>
@@ -64,6 +66,11 @@
       status.style.display = "block";
       status.innerText = "✅ 校验通过: " + (token || "默认授权码");
     }
+    document.addEventListener("mouseup", function (e) {
+      if (e.clientX <= 0) return;
+      var m = document.getElementById("frame-drop-marker");
+      if (m) { m.dataset.received = "1"; m.textContent = "drop@" + e.clientX + "," + e.clientY; }
+    });
   </script>
 </body>
 </html>

@@ -4,10 +4,10 @@ DSH 插件 + 独立 MCP server:共享 Playwright 浏览器自动化 + 原生界�
 
 | 模块 | 做什么 |
 | --- | --- |
-| 🧭 **浏览器自动化** | 共享 Playwright 浏览器:多标签、多 profile、隔离 context、下载/上传、Cookie、what 意图语义定位(`browser_click { what: "登录" }` 一次调用替代快照→查找→点击三轮,零命中返回相近候选 + SoM 看图兜底)、SoM 标徽点击(`mark: N`)、open Shadow DOM 组合树穿透、SPA 路由后 ref 软失效重锚定、点击效果验证(`effect: true`,点了没动静自动换候选)、跨 Frame/IFrame 穿透定位、视口感知动态快照(`viewportOnly`)、多模态 SoM 视口标徽(`som: true`)、批量表单智能填充(`browser_form_fill`)、增量快照(历史版本环形缓存)、抽取字段自动建议(action:suggest),38 个 `browser_*` 工具 |
+| 🧭 **浏览器自动化** | 共享 Playwright 浏览器:多标签、多 profile、隔离 context、下载/上传、Cookie、what 意图语义定位(`browser_click { what: "登录" }` 一次调用替代快照→查找→点击三轮,零命中返回相近候选 + SoM 看图兜底)、SoM 标徽点击(`mark: N`)、open Shadow DOM 组合树穿透、SPA 路由后 ref 软失效重锚定、点击效果验证(`effect: true`,点了没动静自动换候选)、跨 Frame/IFrame 穿透定位、视口感知动态快照(`viewportOnly`)、多模态 SoM 视口标徽(`som: true`)、批量表单智能填充(`browser_form_fill`)、增量快照(历史版本环形缓存)、抽取字段自动建议(action:suggest),39 个 `browser_*` 工具 |
 | 🖥️ **实时画面** | 注入 DSH 界面右下角悬浮面板:浏览器状态 + 实时缩略图,点开大屏模态框(CDP MJPEG 实时流,自动跟随活动标签换页/新开自愈,流不可用时回退轮询截图;访问历史 2 秒轮询);**双向协作**——agent 等待人工操作/敏感审批时显示交互横幅、执行点击/输入前目标元素琥珀色高亮预告(confirmMode:auto 时敏感动作由宿主层强制拦截弹审批,agent 无法绕过),**面板点选教学**(browser_pick_element:疑难元素用户在大图上点一下,直接拿到稳定 selector+指纹+ref),「最近回归」行与报告模态可一键重跑(agent 忙碌自动置灰) |
 | ✅ **回归测试闭环** | 录制回放 + 选择器自愈 + 参数化/数据驱动 + 失败自动重试(`retryFailed`)+ 视觉回归 + 运行历史/报告导出 + **一键导出原生 Playwright 规范代码(`action: "export"`)** + 面板一键重跑(`/runs/rerun`,agent 忙碌置灰) |
-| 🌐 **MCP 接入** | 独立 stdio server(`dsh-browser-mcp`):Claude Desktop/ZCode/Cursor 等任意 MCP 客户端直连全部 38 个工具,不依赖 DSH;审批闸/录制/打点等安全语义与 DSH 宿主一致 |
+| 🌐 **MCP 接入** | 独立 stdio server(`dsh-browser-mcp`):Claude Desktop/ZCode/Cursor 等任意 MCP 客户端直连全部 39 个工具,不依赖 DSH;审批闸/录制/打点等安全语义与 DSH 宿主一致 |
 
 设计原则:能做的一次性操作交给 agent 用 bash 完成,插件只做 bash 做不到的常驻浏览器自动化。运行时依赖 `playwright-core`(复用系统已装的 Edge/Chrome,无需下载 Chromium)与 `@modelcontextprotocol/sdk`(仅 MCP 入口使用,不进 DSH 插件加载链),不依赖任何 `@deepseek-ai` 运行时包。
 
@@ -53,7 +53,7 @@ dsh plugin --profile web add dsh-browser-view
         confirmInReplay: true     # replay/batch 是否同样走 auto 审批闸(false = 回放不弹审批,风险自担)
         somFallback: true          # what 语义定位零命中时自动附 SoM 标徽截图(多模态看图后 click { mark: N })
         refReanchor: true          # SPA 路由后 ref 软失效重锚定(false = 导航即清空的旧行为)
-        toolset: all              # all(默认全量 38 个)| core(高频核心集 25 个,降 systemPrompt 常驻 token)
+        toolset: all              # all(默认全量 39 个)| core(高频核心集 25 个,降 systemPrompt 常驻 token)
 ```
 
 **工具集裁剪(toolset)**:默认 `all` 注册全部工具。日常浏览/操作/人机协作为主的会话可设 `toolset: core`——只注册 25 个高频核心工具(打开/快照/查找/点击/输入/等待/断言/网络/标签/下载上传/登录等待/人工接管/审批/点选教学/诊断),`browser_record / replay / report / extract / form / profile / context / cookies` 等低频工具不注册、不占 systemPrompt 常驻 token(低频工具的录制管理界面不受影响,已有录制仍可回放,只是 agent 会话内无这些工具)。需要做回归测试或数据抓取时把配置改回 `all` 并重启 DSH 即可。
@@ -69,6 +69,7 @@ dsh plugin --profile web add dsh-browser-view
 | `browser_elements` | 可交互元素结构化清单(input/button/select/链接 + 关联 label + 现成 CSS 选择器;有展开下拉时附可见选项) |
 | `browser_click` / `browser_type` / `browser_press` | 点击 / 输入(可清空、可回车提交)/ 按键;`selector`(CSS)、`ref`(aria 快照)、`what`(意图语义定位,页内打分匹配并自动注册 ref,零命中返回相近候选)、`mark`(SoM 标徽编号)四选一;click 另有 `effect: true` 点击效果验证(DOM/URL/网络动静摘要,what 多候选首击无动静自动换选);自动穿透跨域子 Frame 与 open Shadow DOM |
 | `browser_select` | 下拉选择原语:原生 `<select>` 与 antd / element-plus / ARIA listbox 通用,selector/ref/what + option 文本一步完成;找不到选项时报错并列出可见选项 |
+| `browser_drag` | 拖拽/拖放:把源元素拖到目标元素上。源/目标各自定位——`source`/`sourceRef`/`sourceWhat`(+`sourceScope`)/`sourceMark` 四选一,`target`/`targetRef`/`targetWhat`(+`targetScope`)/`targetMark` 同理;优先 HTML5 原生拖放(dragTo),失败或跨 Frame 自动降级物理鼠标序列(覆盖看板卡片、滑块等鼠标拖动类控件),返回 `via` 标明实际通道;`dragged: true` 表示序列已执行,业务侧是否生效需配合 `browser_assert` 验证 |
 | `browser_form_fill` | 智能批量表单填写:一次调用自动识别并填充多个表单控件,结合 UI 适配器自动反查 label、处理输入/选择与弹层并支持稳态等待 |
 | `browser_eval` | 在页面上下文执行 JS(结果自动净化成 lossless JSON) |
 | `browser_batch` | 动作批处理:一次调用顺序执行多个步骤 `[{tool, args}]`(点击→等待→输入→提交类小序列减少往返;禁止嵌套;可录制可回放) |
@@ -285,7 +286,7 @@ browser_confirm({
 
 ## MCP 接入(独立 server,不依赖 DSH)
 
-v0.8.0 起本包附带独立 MCP 入口 `dsh-browser-mcp`(stdio),DSH 之外的 MCP 客户端(Claude Desktop / ZCode / Cursor 等)可直接调用全部 38 个工具——走与 DSH 宿主**同一条** registerTools 装配链,审批闸/录制打点/时光机行为一致:
+v0.8.0 起本包附带独立 MCP 入口 `dsh-browser-mcp`(stdio),DSH 之外的 MCP 客户端(Claude Desktop / ZCode / Cursor 等)可直接调用全部 39 个工具——走与 DSH 宿主**同一条** registerTools 装配链,审批闸/录制打点/时光机行为一致:
 
 ```jsonc
 // 客户端 mcpServers 配置示例

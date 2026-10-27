@@ -151,13 +151,13 @@ async function main() {
       return `server: ${result.serverInfo.name}@${result.serverInfo.version}, instructions ${result.instructions.length} 字`;
     });
 
-    await runStep("tools/list 返回全部 38 个工具", async () => {
+    await runStep("tools/list 返回全部 39 个工具", async () => {
       const result = await client.request("tools/list", {});
       tools = result.tools ?? [];
-      if (tools.length !== 38) throw new Error(`工具数 ${tools.length} ≠ 38`);
+      if (tools.length !== 39) throw new Error(`工具数 ${tools.length} ≠ 39`);
       const badSchema = tools.filter((t) => t.inputSchema?.type !== "object").length;
       if (badSchema > 0) throw new Error(`${badSchema} 个工具 inputSchema 形状异常`);
-      return `38 个工具,inputSchema/outputSchema 全部就位`;
+      return `39 个工具,inputSchema/outputSchema 全部就位`;
     });
 
     await runStep("tools/call browser_open(真实浏览器打开 file:// 静态页)", async () => {

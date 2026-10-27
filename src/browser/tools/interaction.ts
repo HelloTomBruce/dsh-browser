@@ -23,7 +23,7 @@ import {
   fillEditorHelper,
   fillFormFieldHelper,
   transferItemsHelper,
-  dragAndDropHelper,
+  dragAndDropLocators,
   type FormFillResult,
 } from "../primitives/index.js";
 import * as primitives from "../primitives/index.js";
@@ -671,20 +671,58 @@ export async function transferTool(config: BrowserConfig, args: Record<string, a
   };
 }
 
+/**
+ * browser_drag:在页面里把源元素拖到目标元素上。
+ * 源/目标各自走统一定位管线(selector / ref / what+scope / mark 四选一前缀),
+ * 支持 HTML5 原生拖放(dragTo)与鼠标拖动类控件(物理鼠标序列降级);
+ * 跨 Frame 拖拽自动绕过 dragTo 的同 Frame 限制。
+ */
 export async function dragTool(config: BrowserConfig, args: Record<string, any>) {
-  const page = await getPage(config);
-  const source = String(args.source ?? "");
-  const target = String(args.target ?? "");
-  if (!source || !target) {
-    throw new Error("drag 需要 source 与 target 选择器");
-  }
+  // 参数校验先于 getPage:纯字符串判定不需要浏览器会话,参数错误应零成本快速失败。
+  const pickSide = (side: "source" | "target"): Record<string, any> => {
+    const remapped: Record<string, any> = {};
+    if (typeof args[side] === "string" && args[side] !== "") remapped.selector = args[side];
+    if (typeof args[`${side}Ref`] === "string" && args[`${side}Ref`] !== "") remapped.ref = args[`${side}Ref`];
+    if (typeof args[`${side}What`] === "string" && args[`${side}What`].trim() !== "") remapped.what = args[`${side}What`];
+    if (typeof args[`${side}Mark`] === "number") remapped.mark = args[`${side}Mark`];
+    if (typeof args[`${side}Scope`] === "string" && args[`${side}Scope`] !== "") remapped.scope = args[`${side}Scope`];
+    const given = Object.keys(remapped).filter((k) => k !== "scope");
+    if (given.length === 0) {
+      throw new Error(
+        `drag 需要 ${side} 定位: ${side}(CSS 选择器)/${side}Ref(aria ref)/${side}What(意图语义)/${side}Mark(SoM 标徽)至少给一个`,
+      );
+    }
+    return remapped;
+  };
 
-  const handled = await dragAndDropHelper(page, source, target);
+  const describeSide = (remapped: Record<string, any>): string =>
+    remapped.what !== undefined
+      ? `what:"${remapped.what}"`
+      : remapped.ref !== undefined
+        ? `ref:${remapped.ref}`
+        : remapped.mark !== undefined
+          ? `mark:${remapped.mark}`
+          : String(remapped.selector);
+
+  const srcArgs = pickSide("source");
+  const tgtArgs = pickSide("target");
+
+  const page = await getPage(config);
+  const srcRes = await resolveTargetLocator(page, srcArgs);
+  const tgtRes = await resolveTargetLocator(page, tgtArgs);
+
+  // dragTo 不支持跨 Frame;源/目标不在同一执行上下文时直接走物理鼠标序列。
+  const crossFrame = srcRes.container !== tgtRes.container;
+  const via = await dragAndDropLocators(page, srcRes.locator, tgtRes.locator, {
+    timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : undefined,
+    preferMouse: crossFrame,
+  });
 
   return {
-    dragged: handled,
-    source,
-    target,
+    dragged: true,
+    via,
+    source: describeSide(srcArgs),
+    target: describeSide(tgtArgs),
     ...(await pageIdentity(page)),
   };
 }

@@ -1,7 +1,7 @@
 // dsh-browser · MCP server 协议级单测(InMemoryTransport,不起浏览器)
 //
 // 覆盖:initialize instructions 与 DSH systemPrompt 同源、tools/list 计数
-// (all=38 / core=25,与 toolset.test.ts 契约同值)、工具 schema 形状、
+// (all=39 / core=25,与 toolset.test.ts 契约同值)、工具 schema 形状、
 // browser_status 无浏览器调用、未知工具协议错误。
 
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
@@ -58,11 +58,11 @@ describe("MCP server (protocol-level)", () => {
     }
   });
 
-  it("tools/list(toolset=all):38 个,与 toolset 契约同值;schema 形状完整", async () => {
+  it("tools/list(toolset=all):39 个,与 toolset 契约同值;schema 形状完整", async () => {
     const client = await connectClient(makeConfig());
     try {
       const { tools } = await client.listTools();
-      expect(tools.length).toBe(38);
+      expect(tools.length).toBe(39);
       for (const tool of tools) {
         expect(tool.name.startsWith("browser_")).toBe(true);
         expect((tool.description ?? "").length).toBeGreaterThan(2);

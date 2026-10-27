@@ -1,6 +1,6 @@
 // toolset: core | all 渐进式工具披露测试:
 // core 模式只注册高频核心集(低频工具不注册、不进 systemPrompt),
-// all(默认)模式与现状零差异(全部 38 个)。
+// all(默认)模式与现状零差异(全部 39 个)。
 import { describe, it, expect } from "vitest";
 import { registerTools } from "../src/browser/register.js";
 import type { BrowserConfig } from "../src/browser/types.js";
@@ -22,16 +22,16 @@ function captureTools(config: BrowserConfig): Map<string, PlainToolDefinition> {
 const BASE: BrowserConfig = { channel: "auto", headless: true, timeoutMs: 5000 };
 
 describe("toolset 披露", () => {
-  it("默认(不配置)= all:注册全部 38 个,与现状零差异", () => {
+  it("默认(不配置)= all:注册全部 39 个,与现状零差异", () => {
     const tools = captureTools({ ...BASE });
-    expect(tools.size).toBe(38);
+    expect(tools.size).toBe(39);
     expect(tools.has("browser_record")).toBe(true);
     expect(tools.has("browser_replay")).toBe(true);
   });
 
   it('toolset: "all" 显式配置同样全量', () => {
     const tools = captureTools({ ...BASE, toolset: "all" });
-    expect(tools.size).toBe(38);
+    expect(tools.size).toBe(39);
   });
 
   it('toolset: "core":只注册核心集,低频工具不注册', () => {

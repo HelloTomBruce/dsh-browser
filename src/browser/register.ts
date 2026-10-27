@@ -10,6 +10,7 @@ import {
   statusTool, closeTool, tabsTool, downloadTool, uploadTool, cookiesTool, formTool, formSaveTool, formsTool, profileTool, contextTool, doctorTool,
   elementsTool, waitForLoginTool, pauseForHumanTool, confirmTool, pickTool,
   findTool, waitForTool, assertTool, networkTool, recordTool, replayTool, batchTool, extractTool, formFillTool,
+  dragTool,
   captureSelectorHint, SELECTOR_STEP_TOOLS, previewHighlight,
   confirmGate, setRerunHandler,
 } from "./tools.js";
@@ -34,10 +35,11 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
   const AGENT_DOM_TOOLS = new Set([
     "browser_click", "browser_type", "browser_select", "browser_press",
     "browser_upload", "browser_form", "browser_form_fill", "browser_eval",
+    "browser_drag",
   ]);
 
   /** 操作预告:这些工具执行前把目标元素在实时画面上高亮(异步不阻塞)。 */
-  const PREVIEW_TOOLS = new Set(["browser_click", "browser_type", "browser_select", "browser_press"]);
+  const PREVIEW_TOOLS = new Set(["browser_click", "browser_type", "browser_select", "browser_press", "browser_drag"]);
 
   /**
    * auto 审批闸(confirmMode:"auto" 硬约束):live 调用在 register 包装层拦,
@@ -86,11 +88,13 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
         const selector =
           typeof args?.selector === "string" && args.selector
             ? args.selector
-            : typeof args?.ref === "string" && args.ref && page !== null
-              ? (pageRef(page, args.ref)?.selector ?? "")
-              : "";
+            : def.name === "browser_drag" && typeof args?.source === "string" && args.source
+              ? args.source
+              : typeof args?.ref === "string" && args.ref && page !== null
+                ? (pageRef(page, args.ref)?.selector ?? "")
+                : "";
         if (selector !== "") {
-          const label = `${def.name.replace(/^browser_/, "")} ${args?.ref ? `[${args.ref}] ` : ""}${args?.key ?? args?.value ?? args?.text ?? ""}`.trim();
+          const label = `${def.name.replace(/^browser_/, "")} ${args?.ref ? `[${args.ref}] ` : ""}${args?.key ?? args?.value ?? args?.text ?? args?.source ?? ""}`.trim();
           previewHighlight(page, selector, label);
         }
       }
@@ -139,6 +143,7 @@ export function registerTools(ctx: ReefContext, config: BrowserConfig) {
     browser_type: (a) => typeTool(config, a),
     browser_press: (a) => pressTool(config, a),
     browser_select: (a) => selectTool(config, a),
+    browser_drag: (a) => dragTool(config, a),
     browser_eval: (a) => evalTool(config, a),
     browser_screenshot: (a) => screenshotTool(config, a),
     browser_wait: (a) => waitTool(config, a),

@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Drag Playground · dsh-browser</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 24px; background: #f7f8fa; }
+      section { margin-bottom: 32px; padding: 16px; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; }
+      h2 { margin-top: 0; font-size: 16px; }
+      .list { display: flex; gap: 8px; }
+      .item { padding: 8px 14px; background: #e0f2fe; border: 1px solid #7dd3fc; border-radius: 6px; cursor: grab; }
+      .dropzone { margin-top: 12px; min-height: 56px; padding: 8px; border: 2px dashed #94a3b8; border-radius: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+      .dropzone.over { border-color: #0ea5e9; background: #f0f9ff; }
+      .kanban { display: flex; gap: 16px; }
+      .col { width: 200px; min-height: 120px; padding: 8px; background: #f1f5f9; border-radius: 8px; cursor: default; }
+      .col h3 { font-size: 13px; margin: 0 0 8px; }
+      .card { margin-bottom: 8px; padding: 10px; background: #fef9c3; border: 1px solid #fde047; border-radius: 6px; cursor: grab; user-select: none; }
+      .card.dragging { opacity: 0.5; }
+      iframe { width: 260px; height: 120px; border: 1px solid #cbd5e1; border-radius: 6px; }
+    </style>
+  </head>
+  <body>
+    <section id="s1">
+      <h2>1. HTML5 原生拖放(dragstart / dragover / drop)</h2>
+      <div class="list" id="src-list">
+        <div class="item" id="item-1" draggable="true" data-name="条目一">条目一</div>
+        <div class="item" id="item-2" draggable="true" data-name="条目二">条目二</div>
+      </div>
+      <div class="dropzone" id="html5-zone">拖到这里</div>
+    </section>
+
+    <section id="s2">
+      <h2>2. 鼠标拖动看板(mousedown / mousemove / mouseup)</h2>
+      <div class="kanban">
+        <div class="col" id="col-todo"><h3>待办</h3>
+          <div class="card" id="card-a">任务 A</div>
+          <div class="card" id="card-b">任务 B</div>
+        </div>
+        <div class="col" id="col-done"><h3>已完成</h3></div>
+      </div>
+    </section>
+
+    <section id="s3">
+      <h2>3. 跨 Frame 拖动(源在主页面,目标在 iframe)</h2>
+      <div class="card" id="card-x">跨框任务</div>
+      <iframe id="frame-drop" title="drop frame" src="/iframe-subpage.html" style="width:320px;height:220px"></iframe>
+    </section>
+
+    <script>
+      // --- 1. HTML5 原生 DnD ---
+      const zone = document.getElementById("html5-zone");
+      document.querySelectorAll("#src-list .item").forEach((el) => {
+        el.addEventListener("dragstart", (e) => {
+          e.dataTransfer.setData("text/plain", el.dataset.name);
+          e.dataTransfer.effectAllowed = "move";
+        });
+      });
+      zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("over"); });
+      zone.addEventListener("dragleave", () => zone.classList.remove("over"));
+      zone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        const name = e.dataTransfer.getData("text/plain");
+        const tag = document.createElement("div");
+        tag.className = "item";
+        tag.textContent = name;
+        tag.dataset.dropped = name;
+        zone.appendChild(tag);
+        zone.classList.remove("over");
+        zone.dataset.lastDropped = name;
+      });
+
+      // --- 2. 鼠标拖动看板 ---
+      let activeCard = null;
+      document.addEventListener("mousedown", (e) => {
+        const card = e.target.closest("#s2 .card");
+        if (card) { activeCard = card; card.classList.add("dragging"); e.preventDefault(); }
+      });
+      document.addEventListener("mousemove", (e) => {
+        if (!activeCard) return;
+        // 只做视觉态,不位移本体:位移会让卡片盖在落点上,
+        // elementFromPoint 命中自己而不是目标列(真实看板库用克隆/占位符实现)。
+        void e;
+      });
+      document.addEventListener("mouseup", (e) => {
+        if (!activeCard) return;
+        const col = document.elementFromPoint(e.clientX, e.clientY);
+        const target = col && col.closest ? col.closest("#s2 .col") : null;
+        if (target && target !== activeCard.parentElement) {
+          target.appendChild(activeCard);
+          target.dataset.lastReceived = activeCard.textContent;
+        }
+        activeCard.classList.remove("dragging");
+        activeCard = null;
+      });
+    </script>
+  </body>
+</html>

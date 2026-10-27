@@ -5,6 +5,7 @@ import { definePlainTool, genericCard } from "../../lib/tools.js";
 import {
   clickTool, typeTool, pressTool, selectTool, evalTool,
   downloadTool, uploadTool, cookiesTool, formTool, formSaveTool, formsTool, formFillTool,
+  dragTool,
 } from "../tools.js";
 
 export function getInteractionTools(
@@ -169,6 +170,44 @@ export function getInteractionTools(
       render: (_args, value) => `Selected "${value.selected}" in ${value.selector}`,
       timeoutMs: timeout(),
       execute: (args) => selectTool(config, args),
+    }),
+    definePlainTool({
+      name: "browser_drag",
+      description:
+        "把源元素拖到目标元素上(拖拽/拖放):源与目标各自定位——source(CSS)/sourceRef(aria ref)/sourceWhat(意图语义,+sourceScope)/sourceMark(SoM 标徽)四选一,target/targetRef/targetWhat(+targetScope)/targetMark 同理。优先 Playwright dragTo(覆盖 HTML5 原生拖放),失败或跨 Frame 时自动降级为物理鼠标序列(覆盖看板卡片、滑块等鼠标拖动类控件),返回 via 标明实际通道。注意:dragged=true 表示拖拽序列已执行,不保证业务侧生效(drop 区拒绝、控件无响应仍为 true),需要验证请配合 browser_assert。源/目标不可见或零命中时抛错并附诊断。",
+      parameters: {
+        type: "object",
+        properties: {
+          source: { type: "string", description: "源元素 CSS 选择器;与 sourceRef/sourceWhat/sourceMark 互斥。" },
+          sourceRef: { type: "string", description: "源元素 aria 快照 ref(如 'e3');与 source/sourceWhat/sourceMark 互斥。" },
+          sourceWhat: { type: "string", description: "源元素意图描述(如 '任务卡片 A'):页内打分语义定位;与 source/sourceRef/sourceMark 互斥;配合 sourceScope。" },
+          sourceMark: { type: "integer", description: "源元素 SoM 标徽编号(browser_screenshot { som: true });与 source/sourceRef/sourceWhat 互斥。" },
+          sourceScope: { type: "string", description: "配合 sourceWhat 限定扫描范围的容器选择器。" },
+          target: { type: "string", description: "目标元素 CSS 选择器;与 targetRef/targetWhat/targetMark 互斥。" },
+          targetRef: { type: "string", description: "目标元素 aria 快照 ref;与 target/targetWhat/targetMark 互斥。" },
+          targetWhat: { type: "string", description: "目标元素意图描述(如 '待办列'):页内打分语义定位;与 target/targetRef/targetMark 互斥;配合 targetScope。" },
+          targetMark: { type: "integer", description: "目标元素 SoM 标徽编号;与 target/targetRef/targetWhat 互斥。" },
+          targetScope: { type: "string", description: "配合 targetWhat 限定扫描范围的容器选择器。" },
+          timeoutMs: { type: "integer" },
+        },
+        additionalProperties: false,
+      },
+      outputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          dragged: { type: "boolean", description: "拖拽序列已执行(true 不保证业务侧生效,drop 被拒绝也为 true)。" },
+          via: { type: "string", description: "实际执行通道:'dragTo'(HTML5/组件库)或 'mouse'(物理鼠标,含跨 Frame 与降级)。" },
+          source: { type: "string", description: "实际使用的源定位描述(what:/ref:/mark:/selector)。" },
+          target: { type: "string", description: "实际使用的目标定位描述。" },
+          url: { type: "string" },
+          title: { type: "string" },
+        },
+        required: ["dragged", "via", "source", "target", "url", "title"],
+      },
+      render: (_args, value) => `Dragged ${value.source} → ${value.target} (via ${value.via})`,
+      timeoutMs: timeout(),
+      execute: (args) => dragTool(config, args),
     }),
     definePlainTool({
       name: "browser_eval",
