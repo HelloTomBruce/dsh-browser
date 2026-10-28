@@ -1,6 +1,6 @@
 {
   "name": "dsh-browser-view",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "DSH 插件:共享 Playwright 浏览器自动化(38 个 browser_* 工具,含 what 意图语义定位(一次调用替代快照→查找→点击)、SoM 标徽看图点击与零命中截图兜底、SPA ref 软失效重锚定、open Shadow DOM 组合树穿透、跨 Frame/IFrame 定位、视口感知动态快照、批量表单智能填充、点击效果验证与定位失败遥测、Playwright 规范代码导出、批处理、视觉回归、选择器自愈、增量快照)+ 人机协作(面板点选教学 browser_pick_element、人工接管等待、敏感操作审批硬拦截、人机混合录制、面板一键重跑)+ CDP 流式推流、拟人化轨迹与高斯击键、全景时光机、企业富控件矩阵。另附独立 MCP server 入口(bin dsh-browser-mcp,stdio),任意 MCP 客户端可直接调用全部工具。运行时依赖 playwright-core 与 @modelcontextprotocol/sdk(仅 MCP 入口,不进 DSH 插件加载链)。",
   "type": "module",
   "main": "./lib/index.js",
