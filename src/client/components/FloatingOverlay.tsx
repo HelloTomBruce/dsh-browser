@@ -3,11 +3,13 @@ import { createElement, useEffect, useState } from "react";
 import { fetchHistory, getBasePath, submitPick } from "../api.js";
 import { useBrowserStatus } from "../hooks/useBrowserStatus.js";
 import { useConfirmPolling } from "../hooks/useConfirmPolling.js";
+import { useLoginWaitPolling } from "../hooks/useLoginWaitPolling.js";
 import { usePickPolling } from "../hooks/usePickPolling.js";
 import { DARK, LIGHT, useDarkTheme } from "../theme.js";
 import type { NavHistoryItem } from "../types.js";
 import { FloatingPanel } from "./FloatingPanel.js";
 import { InspectionModal, ReportModal } from "./InspectionModal.js";
+import { LoginWaitCard } from "./LoginWaitCard.js";
 
 export function BrowserFloatingOverlay() {
   const dark = useDarkTheme();
@@ -31,6 +33,7 @@ export function BrowserFloatingOverlay() {
 
   const { status, ops, shotVersion, lastRun, agentBusy, rerunMsg, rerunLast } = useBrowserStatus(base);
   const { pendingConfirm, resolveConfirm } = useConfirmPolling(base);
+  const { loginWait, confirmLoginDone } = useLoginWaitPolling(base);
   const { pendingPick } = usePickPolling(base);
 
   // Poll navigation history when modal is open
@@ -63,6 +66,15 @@ export function BrowserFloatingOverlay() {
         zIndex: 2147483000,
       },
     },
+    // 登录等待卡(常驻悬浮,不依赖面板展开——用户在浏览器窗口登录时可能没展开 DSH 面板)
+    loginWait && !loginWait.done
+      ? createElement(LoginWaitCard, {
+          loginWait,
+          onDone: () => {
+            void confirmLoginDone(loginWait.id);
+          },
+        })
+      : null,
     // FAB Floating Button
     createElement(
       "button",

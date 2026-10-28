@@ -61,6 +61,43 @@ export function resolveConfirm(id: string, decision: "allowed" | "denied"): bool
 }
 
 // ---------------------------------------------------------------------------
+// 等待人工登录(browser_wait_for_login):登录完成由用户主动告知——面板常驻
+// 登录等待卡点「我已完成登录」→ POST /login → resolveLoginWait。不再自动
+// 猜测登录状态(启发式对登录表单隐藏不卸载/URL 仍含 auth 子串的 SPA 会永久
+// 漏判,用户已登录仍空转到超时)。
+// ---------------------------------------------------------------------------
+
+/** 一次等待人工登录的请求(browser_wait_for_login 等待期间供面板展示与确认)。 */
+export interface PendingLoginWait {
+  id: string;
+  instruction: string;
+  startedAt: number;
+  /** 用户点「我已完成登录」后置 true。 */
+  done?: boolean;
+}
+
+let pendingLoginWait: PendingLoginWait | null = null;
+
+export function setPendingLoginWait(entry: PendingLoginWait): void {
+  pendingLoginWait = entry;
+}
+
+export function getPendingLoginWait(): PendingLoginWait | null {
+  return pendingLoginWait;
+}
+
+export function clearPendingLoginWait(): void {
+  pendingLoginWait = null;
+}
+
+/** 面板提交「用户已完成登录」;id 不匹配(已被新请求取代/超时清理)时返回 false。 */
+export function resolveLoginWait(id: string): boolean {
+  if (pendingLoginWait === null || pendingLoginWait.id !== id) return false;
+  pendingLoginWait.done = true;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // 面板点选教学(browser_pick_element):agent 挂起等待,用户在实时画面大图上
 // 点击目标元素,面板把「截图位图像素坐标 + 图片尺寸」POST 回来,Node 侧按
 // CDP metadata(deviceWidth/Height)换算成页面视口 CSS 坐标后 elementFromPoint。

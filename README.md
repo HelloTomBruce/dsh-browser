@@ -225,9 +225,11 @@ config:
 > `headless` 默认已是 `false`(有头窗口);服务器等无 GUI 场景请显式覆盖为 `true`。
 
 1. agent 用 `browser_open` 打开登录页(此时弹出真实浏览器窗口);
-2. agent 告知用户完成登录,并调用 `browser_wait_for_login`(可选 `successSelector` / `successUrl` 指定完成条件);
+2. agent 告知用户完成登录,并调用 `browser_wait_for_login`(可选 `successSelector` / `successUrl` 指定确定性完成条件);
 3. 用户在窗口中输入账号 / 扫码 / 完成双因素;
-4. `browser_wait_for_login` 检测到完成条件(默认 URL 跳转)后返回,agent 继续后续操作。
+4. 用户点 DSH 面板登录等待卡上的 **「我已完成登录」**(常驻悬浮,面板收起也可见),工具立即返回,agent 继续后续操作。
+
+> 完成与否由用户点按钮说了算,不做任何登录状态自动猜测(启发式判定对登录表单隐藏不卸载/URL 仍含 auth 特征的 SPA 会永久漏判)。给了 `successSelector` / `successUrl` 时也支持自动判定;独立 MCP 模式没有面板,必须显式给二者之一,否则调用直接报错。
 
 配置 `userDataDir` 后,登录态(Cookie / localStorage)会保存到该目录,后续即使切回 `headless: true` 或重启 DSH,已登录的网站仍保持登录态。
 

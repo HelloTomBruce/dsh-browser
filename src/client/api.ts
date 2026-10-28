@@ -1,7 +1,7 @@
 // dsh-browser · 客户端 — HTTP API 接口封装
 import type {
   BrowserOp, BrowserStatus, LatestRun,
-  NavHistoryItem, PendingConfirm, PendingPick, RecordingDetail, RecordingRow,
+  NavHistoryItem, PendingConfirm, PendingLoginWait, PendingPick, RecordingDetail, RecordingRow,
 } from "./types.js";
 
 let cachedBasePath: string | null = null;
@@ -107,6 +107,31 @@ export async function fetchPendingPick(base: string): Promise<PendingPick | null
     return data?.pick ?? null;
   } catch {
     return null;
+  }
+}
+
+export async function fetchPendingLoginWait(base: string): Promise<PendingLoginWait | null> {
+  try {
+    const res = await fetch(`${base}/login`, { cache: "no-store" });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.loginWait ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 提交「用户已完成登录」确认。 */
+export async function submitLoginDone(base: string, id: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${base}/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 

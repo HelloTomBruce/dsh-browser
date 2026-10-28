@@ -60,6 +60,14 @@ export interface PendingPick {
   startedAt: number;
 }
 
+/** 等待人工登录请求(browser_wait_for_login 等待期间轮询到,用户点「我已完成登录」)。 */
+export interface PendingLoginWait {
+  id: string;
+  instruction: string;
+  startedAt: number;
+  done?: boolean;
+}
+
 export interface LatestRun {
   runId: string;
   ts: number;

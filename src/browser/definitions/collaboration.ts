@@ -13,14 +13,14 @@ export function getCollaborationTools(
     definePlainTool({
       name: "browser_wait_for_login",
       description:
-        "等待人工登录完成。agent 在登录页调用本工具后,提示用户在浏览器窗口中完成登录(有头模式 headless:false 时用户可直接操作;配 userDataDir 登录态会持久化)。支持 instruction 提示语(将显示在右下角实时画面面板);成功条件:优先取 successSelector(登录后出现的元素,如 '#avatar')或 successUrl(登录后 URL 正则);两者未指定时,结合 URL 变化、登录特征消除(密码框等)与页面签名稳态综合判定。轮询间隔 2 秒,超时返回 loggedIn:false(附 waitedMs 与 detail)。",
+        "等待人工登录完成。agent 在登录页调用本工具后,用户在浏览器窗口完成登录(有头模式 headless:false;配 userDataDir 登录态会持久化),然后在实时画面面板的常驻登录等待卡上点「我已完成登录」主动告知,工具立即返回(500ms 确认节拍)——不猜测登录状态,完成与否由用户说了算。亦可显式给 successSelector(登录后出现的元素,如 '#avatar')或 successUrl(登录后 URL 正则)作为确定性自动条件(多标签扫描,轮询间隔 2 秒)。超时返回 loggedIn:false(附 waitedMs 与 detail,不抛错)。注意:无面板环境(独立 MCP 模式)用户无法点按钮确认,必须显式给 successSelector 或 successUrl,否则调用直接报错。",
       parameters: {
         type: "object",
         properties: {
-          instruction: { type: "string", description: "可选:给用户看的提示说明(默认「请在浏览器窗口中完成登录」)。" },
+          instruction: { type: "string", description: "可选:给用户看的提示说明,展示在面板登录等待卡上(默认「请在浏览器窗口中完成登录」)。" },
           timeoutMs: { type: "integer", description: "等待上限(毫秒,默认 120000,上限 600000)。" },
-          successSelector: { type: "string", description: "登录成功后应出现的 CSS 选择器。" },
-          successUrl: { type: "string", description: "登录成功后 URL 应匹配的正则。" },
+          successSelector: { type: "string", description: "可选:登录成功后应出现的 CSS 选择器(确定性自动条件,任一标签可见即完成)。" },
+          successUrl: { type: "string", description: "可选:登录成功后 URL 应匹配的正则(确定性自动条件)。" },
         },
         additionalProperties: false,
       },

@@ -6,7 +6,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ReefContext, WebRoute } from "../lib/types.js";
 import type { BrowserConfig } from "./types.js";
-import { activePage, historyOf, currentProfile, testLogOf, currentPause, getPendingConfirm, resolveConfirm, getPendingPick, resolvePick, activeToolCalls } from "./session.js";
+import { activePage, historyOf, currentProfile, testLogOf, currentPause, getPendingConfirm, resolveConfirm, getPendingLoginWait, resolveLoginWait, getPendingPick, resolvePick, activeToolCalls } from "./session.js";
 import { screencastManager } from "./session/screencast.js";
 import { sessionTracer } from "./session/tracer.js";
 import { statusTool, runPanelRerun, getRerunHandler, rerunBusy } from "./tools.js";
@@ -176,6 +176,23 @@ export function registerBrowserApi(ctx: ReefContext, config: BrowserConfig, base
           }
           // 当前待审批请求(等待期间面板展示允许/拒绝按钮)。
           sendJson(res, 200, { confirm: getPendingConfirm() });
+          return;
+        }
+        if (path === `${base}/login`) {
+          if ((req.method ?? "GET") === "POST") {
+            // 用户确认完成登录:body { id }(面板登录等待卡「我已完成登录」按钮)
+            const body = (await readJsonBody(req).catch(() => undefined)) as { id?: unknown } | undefined;
+            const id = typeof body?.id === "string" ? body.id : "";
+            if (!id) {
+              sendText(res, 400, "id required");
+              return;
+            }
+            const resolved = resolveLoginWait(id);
+            sendJson(res, resolved ? 200 : 409, { resolved, id });
+            return;
+          }
+          // 当前登录等待请求(等待期间面板常驻登录卡展示提示与确认按钮)。
+          sendJson(res, 200, { loginWait: getPendingLoginWait() });
           return;
         }
         if (path === `${base}/pick`) {
