@@ -10,7 +10,7 @@
 //
 // ⚠️ stdout 是协议通道:本进程一切日志必须走 stderr(shim logger 已路由)。
 
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -321,6 +321,19 @@ export async function main(): Promise<void> {
 }
 
 // bin 直跑守卫:被 import(单测/复用)时不自动启动。
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// 必须先 realpath:npm 全局安装与 npx 都经符号链接执行 bin,argv[1] 是软链
+// 路径而 import.meta.url 是真实路径,直接比较永不相等 → main() 被跳过、
+// 进程零输出静默退出(客户端只见连接立即关闭)。
+if (
+  process.argv[1] &&
+  import.meta.url ===
+    (() => {
+      try {
+        return pathToFileURL(realpathSync(process.argv[1] as string)).href;
+      } catch {
+        return "";
+      }
+    })()
+) {
   void main();
 }

@@ -291,23 +291,30 @@ browser_confirm({
 v0.8.0 起本包附带独立 MCP 入口 `dsh-browser-mcp`(stdio),DSH 之外的 MCP 客户端(Claude Desktop / ZCode / Cursor 等)可直接调用全部 39 个工具——走与 DSH 宿主**同一条** registerTools 装配链,审批闸/录制打点/时光机行为一致:
 
 ```jsonc
-// 客户端 mcpServers 配置示例
+// 客户端 mcpServers 配置(推荐:先全局安装一次,再用绝对路径启动)
+// 第一步:npm i -g dsh-browser-view
+// 第二步:command 填 bin 绝对路径(`which dsh-browser-mcp` 查,如 /usr/local/bin/dsh-browser-mcp)
 {
   "mcpServers": {
     "dsh-browser": {
-      "command": "npx",
-      "args": ["-y", "dsh-browser-view"],
+      "command": "/usr/local/bin/dsh-browser-mcp",
       "env": {
         "DSH_BROWSER_HEADLESS": "true",
-        "DSH_BROWSER_USER_DATA_DIR": "~/.dsh-browser/mcp-profile",
+        "DSH_BROWSER_USER_DATA_DIR": "/home/you/.dsh-browser/mcp-profile",
         "DSH_BROWSER_TOOLSET": "core"
-      }
+      },
+      "timeoutMs": 60000
     }
   }
 }
 ```
 
-- 已安装本包时可直接用 `"command": "dsh-browser-mcp"` 或 `"dsh-browser-view"`(双 bin 别名);
+快速体验也可用 `"command": "npx", "args": ["-y", "dsh-browser-view"]`,但注意:
+
+- **npx 冷安装可能超过客户端的 MCP 默认超时**(常见 30s):本包依赖 `playwright-core`,慢网络下首次下载数分钟,期间无响应会被判启动失败——务必加 `"timeoutMs": 120000`,或改用上面的全局安装方案(一次性下载不受超时约束,日常启动 1~2s);
+- **env 里的路径必须写绝对路径**:`~` 不会被展开(环境变量注入不经过 shell),写 `~/.dsh-browser/...` 会在进程工作目录下建名为 `~` 的目录。
+
+- 全局安装后两个 bin 别名等价(`dsh-browser-mcp` / `dsh-browser-view`);GUI 客户端(Claude Desktop 等)建议写绝对路径,避免 PATH 差异;
 - 配置走环境变量 `DSH_BROWSER_<大写蛇形>` → 同名配置键(`TIMEOUT_MS`→`timeoutMs`),`true/false` 转 boolean、纯数字转 number、列表键逗号分隔;校验与默认值复用同一套(见上方配置表,不新增配置键);
 - 工具使用指引由 server `instructions` 下发(与 DSH systemPrompt 同源),`what:"登录"` 语义定位等用法完全一致;
 - 工具元数据支持 MCP 2025 标准 `annotations`(`readOnlyHint` / `destructiveHint` 等属性);

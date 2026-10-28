@@ -5,7 +5,7 @@
 // browser_status 无浏览器调用、未知工具协议错误。
 
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -146,6 +146,59 @@ describe("MCP server (protocol-level)", () => {
       await expect(client.callTool({ name: "browser_nope", arguments: {} })).rejects.toThrow(/未知工具/);
     } finally {
       await client.close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bin 入口回归:npm 全局安装/npx 经符号链接执行 bin 时,run-as-main 守卫曾因
+// argv[1](软链路径)≠ import.meta.url(真实路径)而静默跳过 main()——进程零
+// 输出退出,客户端只见连接立即关闭。此处复刻该形态:临时软链 → node 启动 →
+// 断言 initialize 握手有响应(修复前必然超时)。依赖构建产物 lib/mcp.js
+// (verify 流水线 vitest 在 build 前跑,产物缺失时跳过并在构建后由 e2e 兜底)。
+// ---------------------------------------------------------------------------
+import { spawn } from "node:child_process";
+import { resolve } from "node:path";
+import process from "node:process";
+
+const builtMcpJs = resolve(__dirname, "../lib/mcp.js");
+
+describe("MCP bin 入口(符号链接执行)", { skip: !existsSync(builtMcpJs) }, () => {
+  it("经符号链接启动 bin 时 initialize 握手正常响应(回归:曾静默 no-op)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dsh-mcp-bin-"));
+    const binLink = join(dir, "dsh-browser-mcp");
+    symlinkSync(builtMcpJs, binLink);
+    const child = spawn(process.execPath, [binLink], {
+      env: { ...process.env, DSH_HOME: homeDir, DSH_BROWSER_HEADLESS: "true", DSH_BROWSER_TOOLSET: "core" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (c) => (out += c));
+    child.stderr.on("data", (c) => (err += c));
+    try {
+      child.stdin.write(
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "vitest", version: "0.0.0" } },
+        })}\n`,
+      );
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline && !out.includes('"id":1')) {
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      expect(out).toContain('"serverInfo"');
+      expect(err).toContain("stdio server ready");
+    } finally {
+      child.kill();
+      await new Promise((r) => {
+        child.once("exit", r);
+        setTimeout(r, 3_000);
+      });
+      unlinkSync(binLink);
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
