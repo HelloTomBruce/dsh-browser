@@ -1,7 +1,6 @@
 import { createRouter, createWebHashHistory } from "vue-router";
 import DashboardView from "../views/DashboardView.vue";
 import EnergySavingOverview from "../views/EnergySavingOverview.vue";
-import ObjectSceneRecognitionAlgoConfigView from "../views/ObjectSceneRecognitionAlgoConfigView.vue";
 
 const routes = [
   {
@@ -13,15 +12,6 @@ const routes = [
     path: "/WirelessPowerSaving/EnergySavingOverview",
     name: "EnergySavingOverview",
     component: EnergySavingOverview,
-  },
-  {
-    path: "/WirelessPowerSaving/ObjectSceneRecognitionAlgoConfig",
-    name: "ObjectSceneRecognitionAlgoConfig",
-    component: ObjectSceneRecognitionAlgoConfigView,
-  },
-  {
-    path: "/algo-config",
-    redirect: "/WirelessPowerSaving/ObjectSceneRecognitionAlgoConfig",
   },
   {
     path: "/energy-overview",
