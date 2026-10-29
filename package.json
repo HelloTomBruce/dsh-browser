@@ -39,7 +39,6 @@
     "lint": "biome check src test",
     "format": "biome format --write src test",
     "test": "vitest run",
-    "test:algo": "tsx scripts/test-dev-server-algo-config.ts",
     "test:enterprise": "tsx scripts/test-dev-server-enterprise.ts",
     "test:energy": "tsx scripts/test-dev-server-energy.ts",
     "test:shadow": "tsx scripts/test-dev-server-shadow.ts",

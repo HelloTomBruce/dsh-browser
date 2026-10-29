@@ -19,7 +19,6 @@ npx vitest run test/<file>.test.ts   # 单跑某测试
 # e2e(真实浏览器,自包含静态托管 playground,无需外部服务)
 HEADLESS=true pnpm test:enterprise   # antd 企业场景 6 项
 HEADLESS=true pnpm test:energy       # 能源总览 7 项
-HEADLESS=true pnpm test:algo         # 算法配置 6 项
 HEADLESS=true pnpm test:shadow       # Shadow DOM 穿透 6 项
 HEADLESS=true pnpm test:pick         # 面板点选 4 项(生产面板 API + 真浏览器)
 HEADLESS=true pnpm test:mcp          # MCP server 全链路 5 项(需先 pnpm build,驱动 lib/mcp.js 产物)
