@@ -7,6 +7,13 @@ export interface BrowserConfig {
   executablePath?: string;
   headless?: boolean;
   userDataDir?: string;
+  /**
+   * 页面视口:"window"(视口跟随浏览器窗口大小,关闭视口仿真;有头模式
+   * 拖窗口页面实时重排,坐标换算以 window.innerWidth/innerHeight 为基准)|
+   * { width, height }(固定视口,如 1920×1080)。缺省 = Playwright 默认
+   * 1280×720 固定仿真(不随窗口变化,测试确定性最佳)。
+   */
+  viewport?: "window" | { width: number; height: number };
   profiles?: Record<string, Partial<BrowserConfig>>;
   screenshotDir?: string;
   downloadDir?: string;

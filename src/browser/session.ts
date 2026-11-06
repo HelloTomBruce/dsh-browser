@@ -349,11 +349,41 @@ interface LaunchCandidate {
   executablePath?: string;
 }
 
+/**
+ * 解析 viewport 配置为 Playwright context 选项:
+ * - "window" → viewport: null(关闭视口仿真,视口 = 浏览器窗口客户区,
+ *   拖动窗口页面实时重排;此时 page.viewportSize() 返回 null,坐标换算
+ *   一律走 window.innerWidth/innerHeight 兜底);
+ * - { width, height } → 固定视口仿真(自定义尺寸);
+ * - 缺省 → {}(Playwright 默认 1280×720 固定仿真,行为不变)。
+ * 形状非法时抛中文配置错误(schema 层只声明 any,这里做精确校验)。
+ */
+export function viewportOptionOf(
+  config: BrowserConfig,
+): { viewport: { width: number; height: number } | null } | Record<string, never> {
+  const v = config.viewport;
+  if (v === undefined || v === null) return {};
+  if (v === "window") return { viewport: null };
+  if (typeof v === "object") {
+    const width = Number((v as any).width);
+    const height = Number((v as any).height);
+    if (Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0) {
+      return { viewport: { width, height } };
+    }
+  }
+  throw new Error(
+    'dsh-browser: config.viewport 无效 — 只接受 "window"(视口跟随窗口)或 { width, height }(正整数)',
+  );
+}
+
 export async function launchProfile(name: string, config: BrowserConfig): Promise<void> {
   const pw = await loadPlaywright();
   const state = getProfileState(name);
   const resolved = profileConfig(config, name);
   const base: LaunchCandidate = { headless: resolved.headless ?? false };
+  // 在候选重试循环之外解析:配置形状非法应直接报配置错误,
+  // 不能被 catch 吞进「启动失败」里逐候选重试
+  const viewportOption = viewportOptionOf(resolved);
   const candidates: LaunchCandidate[] = [];
   if (resolved.executablePath) {
     candidates.push({ ...base, executablePath: resolved.executablePath });
@@ -375,6 +405,7 @@ export async function launchProfile(name: string, config: BrowserConfig): Promis
         const context = await pw.chromium.launchPersistentContext(resolved.userDataDir, {
           ...options,
           headless: resolved.headless ?? false,
+          ...viewportOption, // viewport 是 context 级选项,只能在启动时注入
         });
         // 会话恢复的残留标签(如上次会话的登录页)关闭需 await(3s 上限):
         // fire-and-forget 失败时会漏成游离僵尸标签
@@ -482,7 +513,8 @@ export async function newPage(config: BrowserConfig): Promise<Page> {
     return page;
   }
   if (browser !== null) {
-    const page = await browser.newPage();
+    // browser.newPage 每次隐式新建 context:viewport(context 级选项)在此注入
+    const page = await browser.newPage(viewportOptionOf(resolved));
     attachPage(page, resolved);
     return page;
   }

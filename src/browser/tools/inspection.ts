@@ -562,7 +562,11 @@ export async function screenshotTool(config: BrowserConfig, args: Record<string,
     maxAgeDays: config.screenshotMaxAgeDays,
     maxCount: config.screenshotMaxCount,
   });
-  const viewport = page.viewportSize() ?? { width: 0, height: 0 };
+  // viewport:"window"(noViewport)时 viewportSize() 为 null:回退页内实际视口
+  const viewport = page.viewportSize() ??
+    (await page
+      .evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
+      .catch(() => ({ width: 0, height: 0 })));
   return {
     path: filePath,
     bytes: buffer.length,

@@ -478,18 +478,27 @@ export async function pickToolOnPage(
   const timeoutMs = Math.min(Math.max(Number(args.timeoutMs ?? 300_000) || 300_000, 1_000), 600_000);
   const id = `pick-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const meta = screencastManager.getLastFrame()?.metadata ?? undefined;
-  const viewport = (() => {
+  // CSS 坐标基准必须是真实视口(Playwright ground truth)。CDP metadata 的
+  // deviceWidth/deviceHeight 是「捕获/缩放尺寸」——Chrome 对推流帧降采样时
+  // 它等于帧尺寸而非视口(DSH 实测 1280 CSS 视口配 640×360 帧,导致换算
+  // 恰好小一半),不能作基准;metadata 只取 pageScaleFactor(pinch 缩放修正)。
+  // viewport:"window"(noViewport)时 viewportSize() 返回 null —— 以页内
+  // innerWidth/innerHeight 为基准(同样真实,且天然跟随窗口大小);页内也不
+  // 可得(导航中)才兜底 metadata dims。
+  const viewport = await (async () => {
     try {
-      return page.viewportSize() ?? undefined;
+      const size = page.viewportSize();
+      if (size !== null) return size;
+      const inner = (await page.evaluate(() => ({
+        width: window.innerWidth,
+        height: window.innerHeight,
+      }))) as { width: number; height: number };
+      if (inner.width > 0 && inner.height > 0) return inner;
+      return undefined;
     } catch {
       return undefined;
     }
   })();
-  // CSS 坐标基准必须是 viewportSize(Playwright ground truth)。CDP metadata 的
-  // deviceWidth/deviceHeight 是「捕获/缩放尺寸」——Chrome 对推流帧降采样时
-  // 它等于帧尺寸而非视口(DSH 实测 1280 CSS 视口配 640×360 帧,导致换算
-  // 恰好小一半),不能作基准;metadata 只取 pageScaleFactor(pinch 缩放修正),
-  // viewportSize 不可得时才兜底用 metadata dims。
   const psf = Number(meta?.pageScaleFactor) > 0 ? Number(meta?.pageScaleFactor) : 1;
   const deviceWidth = viewport?.width ?? (Number(meta?.deviceWidth) || 0);
   const deviceHeight = viewport?.height ?? (Number(meta?.deviceHeight) || 0);

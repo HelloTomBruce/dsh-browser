@@ -30,6 +30,9 @@ dsh plugin --profile web add dsh-browser-view
         executablePath: ""   # 显式指定浏览器可执行文件(优先于 channel)
         headless: false      # 默认有头(本机调试/人工登录);服务器场景可改 true
         userDataDir: ""      # 设置后登录态跨 DSH 重启保留
+        # viewport: 缺省 = Playwright 默认 1280×720 固定视口仿真(不随窗口变化,测试确定性最佳)
+        # viewport: window          # 视口跟随浏览器窗口大小(拖动窗口页面实时重排)
+        # viewport: { width: 1920, height: 1080 }  # 自定义固定视口
         profiles: {}         # { work: { userDataDir, channel, headless }, ... }
         workspaceDir: ""     # 截图/下载/上传的落盘基准目录(默认探测会话 cwd,多工作区/服务器场景可钉死)
         screenshotDir: .dsh-browser/screenshots

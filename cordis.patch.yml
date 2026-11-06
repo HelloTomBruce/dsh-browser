@@ -6,6 +6,7 @@
 #   executablePath    显式浏览器可执行文件(优先于 channel)
 #   headless          无头模式(默认 false = 有头窗口,适合本机调试/人工登录)
 #   userDataDir       登录态持久化目录(设置后 Cookie/localStorage 跨 DSH 重启保留)
+#   viewport          页面视口:'window'(跟随窗口大小)| { width, height }(固定);缺省 = 1280×720 仿真
 #   profiles          多配置文件:{ work: { userDataDir, channel, headless }, ... }
 #   screenshotDir     截图目录(相对工作区,默认 .dsh-browser/screenshots)
 #   downloadDir       下载目录(默认 .dsh-browser/downloads)

@@ -4,7 +4,7 @@ import {
   getPage, activePage, tabList, closeBrowser, stateOf,
   currentProfile, setCurrentProfile, profileStates, launchProfile,
   namedContextsOf, registerTabPage, newPage, pageIdentity,
-  attachPage, profileConfig, getProfileState,
+  attachPage, profileConfig, getProfileState, viewportOptionOf,
 } from "../session.js";
 
 export async function openTool(configOrArgs: BrowserConfig | Record<string, any>, maybeArgs?: Record<string, any>) {
@@ -99,7 +99,7 @@ export async function contextTool(config: BrowserConfig, args: Record<string, an
         "持久模式(userDataDir)的浏览器只有单一 context,不支持多 context;需要多账号隔离请配置 profiles 多套 userDataDir",
       );
     }
-    const context = await state.browser.newContext();
+    const context = await state.browser.newContext(viewportOptionOf(profileConfig(config, currentProfile)));
     const page = await context.newPage();
     attachPage(page, profileConfig(config, currentProfile));
     const id = registerTabPage(state, page);

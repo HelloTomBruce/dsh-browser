@@ -138,8 +138,12 @@ async function main() {
       })()` });
       const shot = await fetchPng("/browser/screenshot");
       const size = pngSize(shot);
-      const viewport = (await getPage(config)).viewportSize();
-      if (viewport === null) throw new Error("无法读取视口尺寸");
+      const page = await getPage(config);
+      // viewport:"window"(noViewport)时 viewportSize() 为 null,回退页内实际视口
+      const viewport = page.viewportSize() ??
+        ((await evalTool(config, { script: "return { width: window.innerWidth, height: window.innerHeight }" }))
+          .result as { width: number; height: number });
+      if (!viewport || viewport.width <= 0) throw new Error("无法读取视口尺寸");
       const imgX = Math.round((btn.result.x * size.width) / viewport.width);
       const imgY = Math.round((btn.result.y * size.height) / viewport.height);
       // POST 点选(与 InspectionModal handleImageClick 的输出契约一致)

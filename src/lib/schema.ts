@@ -11,6 +11,7 @@ export const BROWSER_CONFIG_SCHEMA: ConfigSchema = {
   executablePath: { type: "string" },
   headless: { type: "boolean" },
   userDataDir: { type: "string" },
+  viewport: { type: "any", optional: true }, // "window" | { width, height };形状在 session 层校验
   profiles: { type: "any" },
   screenshotDir: { type: "string" },
   downloadDir: { type: "string" },
